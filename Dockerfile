@@ -4,6 +4,23 @@
 
 FROM node:22-alpine AS builder
 WORKDIR /app
+
+# NEXT_PUBLIC_* vars are inlined into the client JS bundle at BUILD time
+# (during `npm run build`, below) — not read at container runtime like
+# every other env var. Render's dashboard env vars are only injected into
+# the RUNNING container, not into the isolated `docker build` step, so
+# without these ARG/ENV lines every NEXT_PUBLIC_* var was silently baked in
+# as undefined on every single Docker build, regardless of what the
+# dashboard showed — this is why the login-bypass never worked even after
+# setting the var correctly and clearing the build cache. Render passes
+# each of these through automatically as a build arg IF (and only if) a
+# same-named env var exists on the service — see docs on "Docker secrets/
+# build args" — so declaring them here as ARG makes Render forward them.
+ARG NEXT_PUBLIC_SKIP_AUTH_IN_DEV
+ARG NEXT_PUBLIC_O2D_API_URL
+ENV NEXT_PUBLIC_SKIP_AUTH_IN_DEV=$NEXT_PUBLIC_SKIP_AUTH_IN_DEV
+ENV NEXT_PUBLIC_O2D_API_URL=$NEXT_PUBLIC_O2D_API_URL
+
 COPY package*.json ./
 COPY prisma ./prisma/
 RUN npm install
