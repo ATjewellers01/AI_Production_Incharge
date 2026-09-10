@@ -27,8 +27,13 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-[var(--muted)] p-4">
-      <div className="w-full max-w-sm rounded-xl border border-[var(--border)] bg-[var(--card)] p-8 shadow-sm">
+    // Warm cream backdrop + amber accent bar on the card, matching O2D's
+    // own dedicated login screen treatment (gold gradient accent + cream
+    // ground rather than the plain neutral --muted used elsewhere).
+    <main className="flex min-h-dvh items-center justify-center bg-[oklch(0.97_0.015_75)] p-4">
+      <div className="w-full max-w-sm overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm">
+        <div className="h-1.5 w-full bg-gradient-to-r from-[oklch(0.6_0.15_60)] via-[var(--primary)] to-[oklch(0.75_0.14_70)]" />
+        <div className="p-8">
         <div className="mb-6 flex items-center gap-2">
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)]">
             <Sparkles className="h-4.5 w-4.5" />
@@ -71,6 +76,7 @@ export default function LoginPage() {
         <p className="mt-4 text-center text-xs text-[var(--muted-foreground)]">
           Uses the same Admin/Super Admin account as Order to Delivery. Read-only — no changes are ever made here.
         </p>
+        </div>
       </div>
     </main>
   );

@@ -2,13 +2,23 @@
 
 /* Same neutral shadcn/ui palette + radius scale as at-order-to-dispatch-
    frontend's own globals.css, so this page reads as part of the same O2D
-   product family rather than a bolted-on separate tool. */
+   product family rather than a bolted-on separate tool.
+
+   O2D's own globals.css tokens are actually plain neutral grayscale —
+   its real "look" (warm amber/gold + light slate surfaces) is applied at
+   the component level, not through the shared tokens. --primary here is
+   remapped to that same amber instead of O2D's literal near-black, since
+   this app has no separate design system of its own to preserve — but the
+   rest of the token shape (radius scale, dark-mode structure) matches O2D
+   exactly. Body font is DM Sans (via next/font/google in layout.tsx),
+   matching O2D's own font choice. */
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --font-sans: var(--font-dm-sans);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -32,24 +42,27 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --background: oklch(0.985 0.005 95);
+  --foreground: oklch(0.205 0 0);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.205 0 0);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.205 0 0);
+  /* O2D's own amber-600 (#d97706-ish), used as this app's primary/brand
+     accent — matches the sidebar/header active-state gold used throughout
+     at-order-to-dispatch-frontend. */
+  --primary: oklch(0.646 0.161 58.318);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.97 0.01 90);
+  --secondary-foreground: oklch(0.3 0 0);
+  --muted: oklch(0.97 0.01 90);
+  --muted-foreground: oklch(0.487 0.01 60);
+  --accent: oklch(0.96 0.03 75);
+  --accent-foreground: oklch(0.4 0.1 60);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --border: oklch(0.93 0.02 80);
+  --input: oklch(0.93 0.02 80);
+  --ring: oklch(0.646 0.161 58.318);
   --radius: 0.625rem;
 }
 
@@ -61,19 +74,40 @@
     --card-foreground: oklch(0.985 0 0);
     --popover: oklch(0.205 0 0);
     --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
+    --primary: oklch(0.7 0.16 58);
+    --primary-foreground: oklch(0.15 0 0);
     --secondary: oklch(0.269 0 0);
     --secondary-foreground: oklch(0.985 0 0);
     --muted: oklch(0.269 0 0);
     --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
+    --accent: oklch(0.3 0.06 60);
+    --accent-foreground: oklch(0.9 0.05 70);
     --destructive: oklch(0.704 0.191 22.216);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
+    --ring: oklch(0.7 0.16 58);
   }
+}
+
+:root[data-theme='dark'] {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.7 0.16 58);
+  --primary-foreground: oklch(0.15 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.3 0.06 60);
+  --accent-foreground: oklch(0.9 0.05 70);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.7 0.16 58);
 }
 
 * {

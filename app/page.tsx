@@ -82,8 +82,9 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-6xl flex-col gap-6 p-4 sm:p-6">
-      <header className="flex items-center justify-between">
+    <div className="min-h-dvh bg-[var(--muted)]">
+      {/* Amber bottom-border header, matching O2D's own topbar treatment. */}
+      <header className="sticky top-0 z-10 flex h-[58px] items-center justify-between border-b border-[var(--accent)] bg-[var(--card)] px-4 sm:px-6">
         <div className="flex items-center gap-2">
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)]">
             <Sparkles className="h-4.5 w-4.5" />
@@ -97,16 +98,20 @@ export default function DashboardPage() {
           <button
             onClick={() => void load()}
             disabled={loading}
-            className="flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--accent)] disabled:opacity-60"
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-[var(--accent)] bg-[var(--accent)] px-3 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
           >
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
           </button>
-          <button onClick={signOut} className="flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--accent)]">
+          <button
+            onClick={signOut}
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-3 text-sm text-red-500 hover:bg-red-100"
+          >
             <LogOut className="h-3.5 w-3.5" /> Sign out
           </button>
         </div>
       </header>
 
+      <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6">
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
       {loading && !data && (
@@ -234,7 +239,8 @@ export default function DashboardPage() {
           </section>
         </>
       )}
-    </main>
+      </main>
+    </div>
   );
 }
 
