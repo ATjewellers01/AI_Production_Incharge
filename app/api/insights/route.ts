@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser, AuthError } from '@/lib/auth';
 import { getDelayedOrders, getStageBottlenecks, getKarigarLoad, getSummary } from '@/lib/tools';
-import { openai, CHAT_MODEL } from '@/lib/openai';
+import { getOpenAI, CHAT_MODEL } from '@/lib/openai';
 
 /**
  * The fixed dashboard — always these three insights (plus a quick top-line
@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
   let narrative: string | null = null;
   if (process.env.OPENAI_API_KEY) {
     try {
-      const completion = await openai.chat.completions.create({
+      const completion = await getOpenAI().chat.completions.create({
         model: CHAT_MODEL,
         messages: [
           {

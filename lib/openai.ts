@@ -4,7 +4,18 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import * as tools from './tools';
 import type { AuthUser } from './auth';
 
-export const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Lazy singleton — NOT constructed at module load. The OpenAI SDK throws
+// immediately in its constructor if OPENAI_API_KEY is missing/empty, and
+// this module gets imported during `next build`'s page-data-collection
+// step (it's referenced from app/api/chat/route.ts), which runs with
+// whatever env vars the BUILD environment has — not necessarily the same
+// ones the running container gets. Building without OPENAI_API_KEY set
+// must still succeed; only an actual request needs the key to exist.
+let _openai: OpenAI | null = null;
+export function getOpenAI(): OpenAI {
+  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return _openai;
+}
 
 export const CHAT_MODEL = process.env.AI_INCHARGE_MODEL || 'gpt-4o';
 

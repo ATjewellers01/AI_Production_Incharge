@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 import { requireUser, AuthError } from '@/lib/auth';
-import { openai, CHAT_MODEL, TOOL_SCHEMAS, SYSTEM_PROMPT, runTool } from '@/lib/openai';
+import { getOpenAI, CHAT_MODEL, TOOL_SCHEMAS, SYSTEM_PROMPT, runTool } from '@/lib/openai';
 
 // Caps how many tool-call round-trips one question can trigger, so a
 // confused model can't loop indefinitely against the database.
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
   const toolCallLog: Array<{ name: string; args: unknown }> = [];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const completion = await openai.chat.completions.create({
+    const completion = await getOpenAI().chat.completions.create({
       model: CHAT_MODEL,
       messages,
       tools: TOOL_SCHEMAS,
