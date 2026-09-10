@@ -23,6 +23,16 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
-EXPOSE 3100
-ENV PORT=3100
+# Render's Docker-runtime services can't have "Port" set manually in the
+# dashboard (that field only exists for native/non-Docker runtimes) — it
+# auto-detects the port purely from this EXPOSE + the container's actual
+# listener. 10000 is Render's own documented convention/default for Docker
+# web services; using it (instead of this app's local-dev default of 3100)
+# avoids relying on EXPOSE auto-detection picking up a non-standard port,
+# which is the most likely explanation for a "live" deploy that still 502s
+# on every route with zero backend logs (the request never reaches the
+# container because Render's proxy is routing to a different port than the
+# one Next.js is actually listening on).
+EXPOSE 10000
+ENV PORT=10000
 CMD ["node", "server.js"]
