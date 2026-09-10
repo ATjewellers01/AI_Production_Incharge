@@ -1,0 +1,20 @@
+# Without this file, `COPY . .` in the Dockerfile's builder stage copies the
+# entire local working tree — including a Windows-installed node_modules (if
+# one exists locally) — into the Linux build context. Since that COPY runs
+# AFTER `npm install` in the Dockerfile, it can overwrite the correctly
+# Linux-built node_modules (and Prisma's platform-specific query-engine
+# binary) with Windows-native binaries. The app still boots fine (nothing
+# touches Prisma until the first real request), but the first actual
+# database query then crashes the process immediately and hard enough that
+# no log line makes it out — which matches this service's exact symptom:
+# clean "Ready"/"live" logs, then a silent, request-triggered 502 with zero
+# backend log output. This is the single most likely root cause found so
+# far; everything else checked (port, region, service identity, Render
+# platform status) came back clean.
+node_modules
+.next
+.git
+.env
+.env.local
+.env.production
+npm-debug.log*
