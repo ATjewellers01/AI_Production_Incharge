@@ -9,14 +9,21 @@ import { Pool } from 'pg';
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 function createPrismaClient() {
-  const isRDS = process.env.DATABASE_URL?.includes('rds.amazonaws.com');
+  // Any managed cloud Postgres (Neon, RDS, Supabase, ...) requires SSL —
+  // only a bare `localhost`/`127.0.0.1` connection (local pgAdmin-restored
+  // testing) doesn't. An earlier version of this only enabled SSL for RDS
+  // specifically, which silently connected to Neon with ssl:false and
+  // caused every DB query to fail at runtime (502s in production, even
+  // though the build itself succeeded) — Neon's own connection string
+  // requires `sslmode=require`.
+  const isLocal = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '');
   const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     max: 5,
     min: 0,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
-    ssl: isRDS ? { rejectUnauthorized: false } : false,
+    ssl: isLocal ? false : { rejectUnauthorized: false },
   });
   const adapter = new PrismaPg(pool);
   return new PrismaClient({

@@ -21,12 +21,26 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, message: err.message }, { status: err.status ?? 401 });
   }
 
-  const [summary, delayedOrders, stageBottlenecks, karigarLoad] = await Promise.all([
-    getSummary(user),
-    getDelayedOrders(user),
-    getStageBottlenecks(user),
-    getKarigarLoad(user),
-  ]);
+  let summary, delayedOrders, stageBottlenecks, karigarLoad;
+  try {
+    [summary, delayedOrders, stageBottlenecks, karigarLoad] = await Promise.all([
+      getSummary(user),
+      getDelayedOrders(user),
+      getStageBottlenecks(user),
+      getKarigarLoad(user),
+    ]);
+  } catch (e) {
+    // A database-connection failure (bad DATABASE_URL, SSL mismatch,
+    // unreachable host, etc.) previously crashed this whole route with no
+    // JSON body at all — surfaced as a bare 502 from the platform, with no
+    // hint of the real cause. Log the full error server-side and return a
+    // real error response instead.
+    console.error('[insights] database query failed:', e);
+    return NextResponse.json(
+      { success: false, message: e instanceof Error ? `Database error: ${e.message}` : 'Database error' },
+      { status: 500 },
+    );
+  }
 
   // One AI-generated narrative summary over the three raw datasets — the
   // "insight" on top of the numbers. If OpenAI isn't configured or the call
