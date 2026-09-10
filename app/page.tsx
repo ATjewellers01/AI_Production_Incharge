@@ -41,7 +41,12 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    if (!getToken()) {
+    // Mirrors lib/auth.ts's server-side SKIP_AUTH_IN_DEV bypass — without
+    // this, the frontend would redirect to /login before ever calling the
+    // API, even though the backend would have accepted the request anyway
+    // with no token at all while the bypass is on.
+    const bypassActive = process.env.NEXT_PUBLIC_SKIP_AUTH_IN_DEV === 'true';
+    if (!bypassActive && !getToken()) {
       router.replace('/login');
       return;
     }

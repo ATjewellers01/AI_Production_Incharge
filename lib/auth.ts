@@ -17,13 +17,19 @@ export type AuthUser = {
   branchId: string | null;
 };
 
-// DEV-ONLY auth bypass for local testing without a real O2D login. Requires
-// BOTH `NODE_ENV !== 'production'` AND an explicit opt-in env var, so there
-// is no way this can activate on a real deploy (Render always sets
-// NODE_ENV=production) even if SKIP_AUTH_IN_DEV were left set by accident.
-// Returns a fake SUPER_ADMIN (branchId: null -> sees every branch), so the
-// dashboard/chat can be exercised against local data with zero setup.
-const DEV_AUTH_BYPASS = process.env.NODE_ENV !== 'production' && process.env.SKIP_AUTH_IN_DEV === 'true';
+// TEMPORARY testing-only auth bypass — gated on ONE explicit env var,
+// SKIP_AUTH_IN_DEV=true. Unlike an earlier draft of this file, this is now
+// allowed to activate on Render too (an explicit, deliberate choice for
+// early testing against the Neon test database, made because there's no
+// real O2D login/JWT_SECRET wired up yet) — it is NOT restricted to
+// NODE_ENV!=='production' anymore. Returns a fake SUPER_ADMIN (branchId:
+// null -> sees every branch).
+//
+// ⚠️ SECURITY: remove this env var (or delete this bypass entirely) before
+// this service is ever exposed with real production data or shared beyond
+// a small testing group — while it's set, ANYONE who reaches this
+// service's URL sees every order/karigar with no login at all.
+const DEV_AUTH_BYPASS = process.env.SKIP_AUTH_IN_DEV === 'true';
 
 /** Verifies the Bearer token and loads the current user, read-only. Throws on any failure. */
 export async function requireUser(authHeader: string | null): Promise<AuthUser> {
