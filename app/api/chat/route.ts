@@ -45,40 +45,51 @@ export async function POST(req: NextRequest) {
 
   const toolCallLog: Array<{ name: string; args: unknown }> = [];
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const completion = await getOpenAI().chat.completions.create({
-      model: CHAT_MODEL,
-      messages,
-      tools: TOOL_SCHEMAS,
-      temperature: 0.2,
-    });
-
-    const choice = completion.choices[0];
-    const toolCalls = choice?.message?.tool_calls;
-
-    if (!toolCalls?.length) {
-      // Model is done — no more tools to call, this is the final answer.
-      return NextResponse.json({
-        success: true,
-        data: { reply: choice?.message?.content ?? '', toolCalls: toolCallLog },
+  try {
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const completion = await getOpenAI().chat.completions.create({
+        model: CHAT_MODEL,
+        messages,
+        tools: TOOL_SCHEMAS,
+        temperature: 0.2,
       });
-    }
 
-    // Record the assistant's tool-call turn, then run every requested tool
-    // and feed each result back as its own 'tool' message before asking the
-    // model to continue — the standard OpenAI function-calling round-trip.
-    messages.push(choice.message);
-    for (const call of toolCalls) {
-      const args = JSON.parse(call.function.arguments || '{}');
-      toolCallLog.push({ name: call.function.name, args });
-      let result: unknown;
-      try {
-        result = await runTool(call.function.name, args, user);
-      } catch (e) {
-        result = { error: e instanceof Error ? e.message : 'Tool failed' };
+      const choice = completion.choices[0];
+      const toolCalls = choice?.message?.tool_calls;
+
+      if (!toolCalls?.length) {
+        // Model is done — no more tools to call, this is the final answer.
+        return NextResponse.json({
+          success: true,
+          data: { reply: choice?.message?.content ?? '', toolCalls: toolCallLog },
+        });
       }
-      messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+
+      // Record the assistant's tool-call turn, then run every requested tool
+      // and feed each result back as its own 'tool' message before asking the
+      // model to continue — the standard OpenAI function-calling round-trip.
+      messages.push(choice.message);
+      for (const call of toolCalls) {
+        const args = JSON.parse(call.function.arguments || '{}');
+        toolCallLog.push({ name: call.function.name, args });
+        let result: unknown;
+        try {
+          result = await runTool(call.function.name, args, user);
+        } catch (e) {
+          result = { error: e instanceof Error ? e.message : 'Tool failed' };
+        }
+        messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+      }
     }
+  } catch (e) {
+    // Covers a failing OpenAI call itself (bad/missing API key, network
+    // issue, rate limit) — previously uncaught here, so it would have
+    // crashed the whole request with no JSON body (a bare 500/502).
+    console.error('[chat] request failed:', e);
+    return NextResponse.json(
+      { success: false, message: e instanceof Error ? `Chat error: ${e.message}` : 'Chat error' },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json(
