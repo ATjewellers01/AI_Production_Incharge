@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, Clock, Hammer, Loader2, LogOut, RefreshCw, Send, Sparkles } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
-import { clearToken, fetchInsights, getToken, sendChat } from '@/lib/client-api';
+import { clearToken, fetchInsights, getToken, sendChatStream } from '@/lib/client-api';
 import type { DelayedOrder, KarigarLoad, StageBottleneck, Summary } from '@/lib/tools';
 
 type InsightsData = {
@@ -66,11 +67,24 @@ export default function DashboardPage() {
     setChatMessages(next);
     setChatInput('');
     setChatBusy(true);
+    // Push an empty assistant placeholder immediately, then grow its
+    // content in place as stream chunks arrive — this is what makes the
+    // reply visibly type itself out instead of appearing all at once.
+    setChatMessages((cur) => [...cur, { role: 'assistant', content: '' }]);
     try {
-      const res = await sendChat(next);
-      setChatMessages((cur) => [...cur, { role: 'assistant', content: res.reply }]);
+      await sendChatStream(next, (textSoFar) => {
+        setChatMessages((cur) => {
+          const updated = [...cur];
+          updated[updated.length - 1] = { role: 'assistant', content: textSoFar };
+          return updated;
+        });
+      });
     } catch (e) {
-      setChatMessages((cur) => [...cur, { role: 'assistant', content: `Sorry — ${e instanceof Error ? e.message : 'something went wrong'}.` }]);
+      setChatMessages((cur) => {
+        const updated = [...cur];
+        updated[updated.length - 1] = { role: 'assistant', content: `Sorry — ${e instanceof Error ? e.message : 'something went wrong'}.` };
+        return updated;
+      });
     } finally {
       setChatBusy(false);
     }
@@ -201,18 +215,29 @@ export default function DashboardPage() {
               {chatMessages.length === 0 && (
                 <p className="text-sm text-[var(--muted-foreground)]">Ask anything about current orders, delays, or karigar workload.</p>
               )}
-              {chatMessages.map((m, i) => (
-                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div
-                    className={`max-w-[80%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${
-                      m.role === 'user' ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--muted)]'
-                    }`}
-                  >
-                    {m.content}
+              {chatMessages.map((m, i) => {
+                const isLastAssistant = m.role === 'assistant' && i === chatMessages.length - 1;
+                const stillWaitingForFirstChunk = isLastAssistant && chatBusy && m.content === '';
+                if (stillWaitingForFirstChunk) return null; // covered by the "Thinking…" bubble below
+                return (
+                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div
+                      className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
+                        m.role === 'user' ? 'whitespace-pre-wrap bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--muted)]'
+                      }`}
+                    >
+                      {m.role === 'assistant' ? (
+                        <div className="chat-markdown">
+                          <ReactMarkdown>{m.content}</ReactMarkdown>
+                        </div>
+                      ) : (
+                        m.content
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-              {chatBusy && (
+                );
+              })}
+              {chatBusy && chatMessages[chatMessages.length - 1]?.content === '' && (
                 <div className="flex justify-start">
                   <div className="flex items-center gap-2 rounded-lg bg-[var(--muted)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> Thinking…

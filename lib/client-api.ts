@@ -59,7 +59,67 @@ export async function fetchInsights() {
   return json.data;
 }
 
-export async function sendChat(messages: Array<{ role: 'user' | 'assistant'; content: string }>) {
-  const json = await authedFetch('/api/chat', { method: 'POST', body: JSON.stringify({ messages }) });
-  return json.data as { reply: string; toolCalls: Array<{ name: string; args: unknown }> };
+type ChatStreamEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'done'; toolCalls: Array<{ name: string; args: unknown }> }
+  | { type: 'error'; message: string };
+
+/**
+ * Streaming counterpart to the old one-shot sendChat — /api/chat now
+ * responds with newline-delimited JSON events (see that route's own
+ * comment for the exact protocol) instead of a single JSON body. Calls
+ * onDelta as each chunk of the reply arrives so the UI can render it live,
+ * word-by-word, instead of waiting for the whole answer.
+ */
+export async function sendChatStream(
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  onDelta: (textSoFar: string) => void,
+): Promise<{ reply: string; toolCalls: Array<{ name: string; args: unknown }> }> {
+  const token = getToken();
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { Authorization: token ? `Bearer ${token}` : '', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  });
+
+  if (res.status === 401) {
+    clearToken();
+    window.location.assign('/login');
+    throw new Error('Session expired');
+  }
+  if (!res.ok || !res.body) {
+    // A non-streaming failure (e.g. auth/validation error before the
+    // stream started) still comes back as a plain JSON error body.
+    const json = await res.json().catch(() => null);
+    throw new Error(json?.message || 'Request failed');
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let reply = '';
+  let toolCalls: Array<{ name: string; args: unknown }> = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? ''; // last line may be incomplete, keep for next read
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as ChatStreamEvent;
+      if (event.type === 'delta') {
+        reply += event.text;
+        onDelta(reply);
+      } else if (event.type === 'done') {
+        toolCalls = event.toolCalls;
+      } else if (event.type === 'error') {
+        throw new Error(event.message);
+      }
+    }
+  }
+
+  return { reply, toolCalls };
 }

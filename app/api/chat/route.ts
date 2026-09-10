@@ -10,12 +10,32 @@ const MAX_TOOL_ROUNDS = 5;
 
 type ChatBody = { messages: Array<{ role: 'user' | 'assistant'; content: string }> };
 
+// Streamed as newline-delimited JSON ("NDJSON") text chunks, NOT Server-Sent
+// Events — simpler to produce here and to parse on the client with a plain
+// ReadableStream reader, no EventSource/'data: ' framing needed. Each line
+// is one of:
+//   {"type":"delta","text":"..."}   — one more slice of the reply to append
+//   {"type":"done","toolCalls":[...]} — stream finished, carries the
+//                                        tool-call log for the UI's debug view
+//   {"type":"error","message":"..."}  — something failed mid-stream; the
+//                                        client shows this instead of more text
+type StreamEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'done'; toolCalls: Array<{ name: string; args: unknown }> }
+  | { type: 'error'; message: string };
+
 /**
  * The flexible side of this service — unlike /api/insights (three fixed
  * calls, always), this lets the model choose which of lib/tools.ts's
  * functions (if any) to call, in whatever combination the free-text
  * question needs. It can never call anything beyond TOOL_SCHEMAS, and none
  * of those functions can write to the database (see lib/tools.ts).
+ *
+ * Tool-call rounds (the model deciding which data to fetch) are NOT
+ * streamed — they produce no user-visible text, only function-call
+ * arguments, so there's nothing worth showing incrementally. Only the
+ * FINAL round (the model's actual answer, once it has every tool result it
+ * asked for) streams its text back token-by-token.
  */
 export async function POST(req: NextRequest) {
   let user;
@@ -44,56 +64,107 @@ export async function POST(req: NextRequest) {
   ];
 
   const toolCallLog: Array<{ name: string; args: unknown }> = [];
+  const encoder = new TextEncoder();
 
-  try {
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const completion = await getOpenAI().chat.completions.create({
-        model: CHAT_MODEL,
-        messages,
-        tools: TOOL_SCHEMAS,
-        temperature: 0.2,
-      });
-
-      const choice = completion.choices[0];
-      const toolCalls = choice?.message?.tool_calls;
-
-      if (!toolCalls?.length) {
-        // Model is done — no more tools to call, this is the final answer.
-        return NextResponse.json({
-          success: true,
-          data: { reply: choice?.message?.content ?? '', toolCalls: toolCallLog },
-        });
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      function send(event: StreamEvent) {
+        controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
       }
 
-      // Record the assistant's tool-call turn, then run every requested tool
-      // and feed each result back as its own 'tool' message before asking the
-      // model to continue — the standard OpenAI function-calling round-trip.
-      messages.push(choice.message);
-      for (const call of toolCalls) {
-        const args = JSON.parse(call.function.arguments || '{}');
-        toolCallLog.push({ name: call.function.name, args });
-        let result: unknown;
-        try {
-          result = await runTool(call.function.name, args, user);
-        } catch (e) {
-          result = { error: e instanceof Error ? e.message : 'Tool failed' };
+      try {
+        for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+          const isLastPossibleRound = round === MAX_TOOL_ROUNDS - 1;
+
+          if (!isLastPossibleRound) {
+            // Non-streamed: we need to see whether the model wants to call a
+            // tool BEFORE committing to a streamed text response, since a
+            // streaming completion with tool_calls arrives as fragmented
+            // JSON-argument deltas, not readable text — not worth streaming.
+            const completion = await getOpenAI().chat.completions.create({
+              model: CHAT_MODEL,
+              messages,
+              tools: TOOL_SCHEMAS,
+              temperature: 0.2,
+            });
+            const choice = completion.choices[0];
+            const toolCalls = choice?.message?.tool_calls;
+
+            if (!toolCalls?.length) {
+              // Model answered directly with no tool call — stream this
+              // text back in small artificial chunks so the UI still gets
+              // the live-typing effect, then finish.
+              const text = choice?.message?.content ?? '';
+              for (const chunk of chunkText(text)) send({ type: 'delta', text: chunk });
+              send({ type: 'done', toolCalls: toolCallLog });
+              controller.close();
+              return;
+            }
+
+            messages.push(choice.message);
+            for (const call of toolCalls) {
+              const args = JSON.parse(call.function.arguments || '{}');
+              toolCallLog.push({ name: call.function.name, args });
+              let result: unknown;
+              try {
+                result = await runTool(call.function.name, args, user);
+              } catch (e) {
+                result = { error: e instanceof Error ? e.message : 'Tool failed' };
+              }
+              messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+            }
+            continue;
+          }
+
+          // Final allowed round: no more tool calls permitted, so ask for a
+          // real streamed text answer directly.
+          const completionStream = await getOpenAI().chat.completions.create({
+            model: CHAT_MODEL,
+            messages,
+            temperature: 0.2,
+            stream: true,
+          });
+          for await (const part of completionStream) {
+            const delta = part.choices[0]?.delta?.content;
+            if (delta) send({ type: 'delta', text: delta });
+          }
+          send({ type: 'done', toolCalls: toolCallLog });
+          controller.close();
+          return;
         }
-        messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+      } catch (e) {
+        // Covers a failing OpenAI call itself (bad/missing API key, network
+        // issue, rate limit) — reported as a stream event since headers are
+        // already committed once streaming has started.
+        console.error('[chat] request failed:', e);
+        send({ type: 'error', message: e instanceof Error ? `Chat error: ${e.message}` : 'Chat error' });
+        controller.close();
       }
-    }
-  } catch (e) {
-    // Covers a failing OpenAI call itself (bad/missing API key, network
-    // issue, rate limit) — previously uncaught here, so it would have
-    // crashed the whole request with no JSON body (a bare 500/502).
-    console.error('[chat] request failed:', e);
-    return NextResponse.json(
-      { success: false, message: e instanceof Error ? `Chat error: ${e.message}` : 'Chat error' },
-      { status: 500 },
-    );
-  }
+    },
+  });
 
-  return NextResponse.json(
-    { success: false, message: 'Could not produce an answer within the tool-call limit — try a more specific question.' },
-    { status: 500 },
-  );
+  return new NextResponse(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+}
+
+/** Splits text into small chunks so a non-streamed model reply still gets a
+ * live-typing effect on the client, matching the real-streamed case. */
+function chunkText(text: string, size = 6): string[] {
+  const words = text.split(/(\s+)/);
+  const chunks: string[] = [];
+  let buf = '';
+  for (const w of words) {
+    buf += w;
+    if (buf.length >= size) {
+      chunks.push(buf);
+      buf = '';
+    }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
 }
