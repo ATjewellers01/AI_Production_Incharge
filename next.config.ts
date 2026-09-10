@@ -2,9 +2,9 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  // Standalone output so the Docker image only needs the compiled server +
-  // its actually-used node_modules subset, not the whole dev tree.
-  output: 'standalone',
+  // DIAGNOSTIC (minimal-test branch): standalone output disabled here to
+  // test plain `next start` instead — see Dockerfile on this branch.
+  // Normally this should be `output: 'standalone'` (master branch keeps it).
 };
 
 export default nextConfig;
