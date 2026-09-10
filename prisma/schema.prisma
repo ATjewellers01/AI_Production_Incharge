@@ -1,0 +1,179 @@
+// AI Production Incharge — READ-ONLY view of the same Postgres database as
+// at-order-to-dispatch-backend. This is a deliberately minimal subset of
+// that project's full schema.prisma: only the models this service actually
+// queries (Order, Karigar, Company, Branch, OrderStage, Category, Melting,
+// DeliveryLocation, User). Every other table in the real database (the
+// merged ERP module — Product, ProductionPlan, KarigarIssueEntry, etc., and
+// this service never queries them) simply isn't declared here — Prisma
+// only needs to know about tables THIS client reads.
+//
+// SAFETY: this service has ZERO write paths anywhere in its own code (no
+// `.create(`, `.update(`, `.delete(`, `.upsert(` call exists in this repo,
+// enforced by convention — see CLAUDE.md). Even so, treat this schema as
+// read-only in spirit: never add a migration here. This service must never
+// run `prisma migrate` against the shared database — at-order-to-dispatch-
+// backend owns that schema's lifecycle exclusively. If a query needs a
+// field/model not listed below, add the SAME field/model definition
+// (copied from at-order-to-dispatch-backend's own schema.prisma) rather
+// than inventing a new shape — the physical table must match exactly.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Connection URL lives in prisma.config.ts (Prisma 7 driver-adapter model),
+// not here — matches at-order-to-dispatch-backend's own setup exactly.
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  USER
+}
+
+enum OrderType {
+  NORMAL
+  URGENT
+  STOCK
+  REPAIR_ITEM
+}
+
+enum OrderStatus {
+  ACTIVE
+  COMPLETED
+  DUMPED
+}
+
+enum BranchWorkflowType {
+  STANDARD
+  KOLKATA
+  NO_PRODUCTION
+}
+
+enum TransferStatus {
+  NONE
+  PENDING
+  ARRIVED
+  RECEIVED
+}
+
+model Branch {
+  id           String             @id
+  name         String
+  code         String             @unique
+  isActive     Boolean            @default(true)
+  workflowType BranchWorkflowType @default(STANDARD)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  users       User[]
+  karigars    Karigar[]
+  companies   Company[]
+  categories  Category[]
+  orderStages OrderStage[]
+  meltings    Melting[]
+  orders      Order[]
+}
+
+// Only the fields this service needs to identify/authenticate a caller and
+// scope results by branch — NOT the full User model (no password hash is
+// ever selected/read by this service's own queries).
+model User {
+  id          String   @id
+  userId      String   @unique
+  name        String
+  role        Role     @default(USER)
+  isActive    Boolean  @default(true)
+  branchId    String?
+  branch      Branch?  @relation(fields: [branchId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Karigar {
+  id       String   @id
+  branchId String
+  branch   Branch   @relation(fields: [branchId], references: [id])
+  code     String   @unique
+  name     String
+  phone    String?
+  type     String   @default("FACTORY")
+  isActive Boolean  @default(true)
+  orders   Order[]
+}
+
+model Company {
+  id       String  @id
+  branchId String
+  branch   Branch  @relation(fields: [branchId], references: [id])
+  name     String
+  isActive Boolean @default(true)
+  orders   Order[]
+}
+
+model Category {
+  id       String  @id
+  branchId String
+  branch   Branch  @relation(fields: [branchId], references: [id])
+  name     String  @unique
+  isActive Boolean @default(true)
+}
+
+model OrderStage {
+  id       String  @id
+  branchId String
+  branch   Branch  @relation(fields: [branchId], references: [id])
+  name     String  @unique
+  sequence Int
+  isActive Boolean @default(true)
+}
+
+model Melting {
+  id       String  @id
+  branchId String
+  branch   Branch  @relation(fields: [branchId], references: [id])
+  type     String
+  purity   String
+  isActive Boolean @default(true)
+}
+
+// Mirrors at-order-to-dispatch-backend's Order model field-for-field (only
+// the columns this service's tool functions actually read — see the header
+// comment: any addition here must match that project's schema.prisma
+// exactly, since it's the same physical table).
+model Order {
+  id                   String      @id
+  branchId             String
+  branch               Branch      @relation(fields: [branchId], references: [id])
+  orderNo              String      @unique
+  orderDate            DateTime    @default(now())
+  companyId            String
+  company              Company     @relation(fields: [companyId], references: [id])
+  karigarId            String?
+  karigar              Karigar?    @relation(fields: [karigarId], references: [id])
+  category             String
+  subcategory          String?
+  quantity             Int         @default(1)
+  quantityText         String?
+  currentStage         String      @default("ORDER")
+  orderStage           String      @default("")
+  orderType            OrderType   @default(NORMAL)
+  jobType              String      @default("ORDER")
+  status               OrderStatus @default(ACTIVE)
+  dueDate              DateTime?
+  expectedDeliveryDate DateTime?
+  karigarDeliveryDate  DateTime?
+  deliveryLocation     String?
+  totalWeight          Float?
+  transferStatus       TransferStatus @default(NONE)
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  @@index([status])
+  @@index([status, currentStage])
+  @@index([createdAt(sort: Desc)])
+  @@index([karigarId])
+  @@index([branchId])
+}
