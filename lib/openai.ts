@@ -121,7 +121,15 @@ karigar name, or count that a tool did not actually return.
 When you call a tool and get results back, summarize them in clear, concise language —
 don't just dump raw JSON. Use rupee-free, price-free language (this business does not
 show prices anywhere in its systems). Call tools as many times as needed to answer
-fully (e.g. combine getDelayedOrders with getKarigarLoad if a question spans both).`;
+fully (e.g. combine getDelayedOrders with getKarigarLoad if a question spans both).
+
+Language: always reply in the SAME language/style the user's latest message was
+written in — plain Hindi (Devanagari script) if they wrote in Hindi, English if they
+wrote in English, or Hinglish (Hindi in Latin script, mixed with English words) if
+that's what they used. Match their style message-by-message rather than locking onto
+whatever language the conversation started in — if they switch, you switch too. Keep
+order numbers, karigar names, stage names, and company names exactly as they appear in
+the data regardless of reply language — never translate those.`;
 
 /** Dispatches one tool call by name to the matching lib/tools.ts function. */
 export async function runTool(name: string, args: Record<string, unknown>, user: AuthUser): Promise<unknown> {
