@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, Clock, Hammer, Loader2, LogOut, RefreshCw, Send, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 import { clearToken, fetchInsights, getToken, sendChatStream } from '@/lib/client-api';
 import type { DelayedOrder, KarigarLoad, StageBottleneck, Summary } from '@/lib/tools';
@@ -222,13 +223,20 @@ export default function DashboardPage() {
                 return (
                   <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div
-                      className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
-                        m.role === 'user' ? 'whitespace-pre-wrap bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--muted)]'
+                      className={`rounded-lg px-3 py-2 text-sm ${
+                        m.role === 'user'
+                          ? 'max-w-[80%] whitespace-pre-wrap bg-[var(--primary)] text-[var(--primary-foreground)]'
+                          : 'max-w-[95%] min-w-0 bg-[var(--muted)]'
                       }`}
                     >
                       {m.role === 'assistant' ? (
                         <div className="chat-markdown">
-                          <ReactMarkdown>{m.content}</ReactMarkdown>
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{ table: ({ children }) => <div className="table-wrap"><table>{children}</table></div> }}
+                          >
+                            {m.content}
+                          </ReactMarkdown>
                         </div>
                       ) : (
                         m.content

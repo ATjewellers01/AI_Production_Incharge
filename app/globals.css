@@ -137,3 +137,26 @@ body {
   color: var(--primary);
   text-decoration: underline;
 }
+.chat-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9em;
+}
+.chat-markdown .table-wrap {
+  margin: 0.5em 0;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid var(--border);
+  padding: 0.35em 0.6em;
+  text-align: left;
+}
+.chat-markdown th {
+  background: var(--secondary);
+  font-weight: 600;
+}
+.chat-markdown tr:nth-child(even) td {
+  background: var(--muted);
+}
