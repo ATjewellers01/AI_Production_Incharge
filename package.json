@@ -4,12 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "prisma generate && prisma generate --schema=./prisma/jewel-factory/schema.prisma && next build",
     "start": "next start -H 0.0.0.0 -p ${PORT:-3100}",
     "typecheck": "tsc --noEmit",
     "lint": "next lint",
-    "postinstall": "prisma generate",
-    "db:generate": "prisma generate",
+    "postinstall": "prisma generate && prisma generate --schema=./prisma/jewel-factory/schema.prisma",
+    "db:generate": "prisma generate && prisma generate --schema=./prisma/jewel-factory/schema.prisma",
     "db:pull": "prisma db pull"
   },
   "dependencies": {

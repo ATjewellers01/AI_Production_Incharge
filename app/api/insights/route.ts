@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser, AuthError } from '@/lib/auth';
 import { getDelayedOrders, getStageBottlenecks, getKarigarLoad, getSummary } from '@/lib/tools';
-import { getOpenAI, CHAT_MODEL } from '@/lib/openai';
+import { getDelayedOrdersJf, getStageBottlenecksJf, getKarigarLoadJf, getSummaryJf } from '@/lib/tools-jf';
+import { getOpenAI, CHAT_MODEL, type Source } from '@/lib/openai';
 
 /**
  * The fixed dashboard — always these three insights (plus a quick top-line
@@ -11,6 +12,11 @@ import { getOpenAI, CHAT_MODEL } from '@/lib/openai';
  * NOT the LLM function-calling path (see /api/chat for that) — the three
  * insights here are pre-decided and always shown, so they're called
  * directly rather than left to the model to choose.
+ *
+ * ?source=o2d (default) or ?source=jf selects which business's data comes
+ * back — added 2026-09-13 alongside Jewel Factory. The dashboard's own
+ * source toggle passes this; the response shape is identical either way so
+ * the frontend cards render the same regardless of which is active.
  */
 export async function GET(req: NextRequest) {
   let user;
@@ -21,21 +27,21 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, message: err.message }, { status: err.status ?? 401 });
   }
 
+  const source: Source = req.nextUrl.searchParams.get('source') === 'jf' ? 'jf' : 'o2d';
+
   let summary, delayedOrders, stageBottlenecks, karigarLoad;
   try {
-    [summary, delayedOrders, stageBottlenecks, karigarLoad] = await Promise.all([
-      getSummary(user),
-      getDelayedOrders(user),
-      getStageBottlenecks(user),
-      getKarigarLoad(user),
-    ]);
+    [summary, delayedOrders, stageBottlenecks, karigarLoad] =
+      source === 'jf'
+        ? await Promise.all([getSummaryJf(user), getDelayedOrdersJf(user), getStageBottlenecksJf(user), getKarigarLoadJf(user)])
+        : await Promise.all([getSummary(user), getDelayedOrders(user), getStageBottlenecks(user), getKarigarLoad(user)]);
   } catch (e) {
     // A database-connection failure (bad DATABASE_URL, SSL mismatch,
     // unreachable host, etc.) previously crashed this whole route with no
     // JSON body at all — surfaced as a bare 502 from the platform, with no
     // hint of the real cause. Log the full error server-side and return a
     // real error response instead.
-    console.error('[insights] database query failed:', e);
+    console.error(`[insights:${source}] database query failed:`, e);
     return NextResponse.json(
       { success: false, message: e instanceof Error ? `Database error: ${e.message}` : 'Database error' },
       { status: 500 },
@@ -56,7 +62,9 @@ export async function GET(req: NextRequest) {
           {
             role: 'system',
             content:
-              'You are a production-floor analyst for a jewellery order-to-delivery system. Given raw JSON data (delayed orders, stage bottlenecks, karigar workload), write a short (4-6 sentence) plain-language briefing a production incharge would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.',
+              source === 'jf'
+                ? 'You are a production-floor analyst for a jewellery manufacturer (Jewel Factory). Given raw JSON data (delayed orders across Catalogue/Store Customer/Customised orders, stage bottlenecks, karigar workload), write a short (4-6 sentence) plain-language briefing a manufacturer would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.'
+                : 'You are a production-floor analyst for a jewellery order-to-delivery system. Given raw JSON data (delayed orders, stage bottlenecks, karigar workload), write a short (4-6 sentence) plain-language briefing a production incharge would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.',
           },
           {
             role: 'user',
@@ -67,7 +75,7 @@ export async function GET(req: NextRequest) {
       });
       narrative = completion.choices[0]?.message?.content ?? null;
     } catch (e) {
-      console.error('[insights] OpenAI narrative failed:', e);
+      console.error(`[insights:${source}] OpenAI narrative failed:`, e);
     }
   }
 

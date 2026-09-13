@@ -2,13 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 import { requireUser, AuthError } from '@/lib/auth';
-import { getOpenAI, CHAT_MODEL, TOOL_SCHEMAS, SYSTEM_PROMPT, runTool } from '@/lib/openai';
+import { getOpenAI, CHAT_MODEL, getToolSchemas, getSystemPrompt, runTool, type Source } from '@/lib/openai';
 
 // Caps how many tool-call round-trips one question can trigger, so a
 // confused model can't loop indefinitely against the database.
 const MAX_TOOL_ROUNDS = 5;
 
-type ChatBody = { messages: Array<{ role: 'user' | 'assistant'; content: string }> };
+type ChatBody = {
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  // Which business this question is scoped to — 'o2d' (default, for
+  // backward compatibility with any client not yet sending it) or 'jf'
+  // (Jewel Factory, added 2026-09-13). Determines both which tools the
+  // model is offered and which lib/tools*.ts functions actually run.
+  source?: Source;
+};
 
 // Streamed as newline-delimited JSON ("NDJSON") text chunks, NOT Server-Sent
 // Events — simpler to produce here and to parse on the client with a plain
@@ -26,10 +33,12 @@ type StreamEvent =
 
 /**
  * The flexible side of this service — unlike /api/insights (three fixed
- * calls, always), this lets the model choose which of lib/tools.ts's
- * functions (if any) to call, in whatever combination the free-text
- * question needs. It can never call anything beyond TOOL_SCHEMAS, and none
- * of those functions can write to the database (see lib/tools.ts).
+ * calls, always), this lets the model choose which of lib/tools.ts's (O2D)
+ * or lib/tools-jf.ts's (Jewel Factory) functions to call, in whatever
+ * combination the free-text question needs. It can never call anything
+ * beyond the tool schemas for the request's own `source`, and none of
+ * those functions can write to the database (see each tools file's own
+ * header comment).
  *
  * Tool-call rounds (the model deciding which data to fetch) are NOT
  * streamed — they produce no user-visible text, only function-call
@@ -54,12 +63,15 @@ export async function POST(req: NextRequest) {
   if (!body?.messages?.length) {
     return NextResponse.json({ success: false, message: 'messages is required' }, { status: 400 });
   }
+  const source: Source = body.source === 'jf' ? 'jf' : 'o2d';
+  const toolSchemas = getToolSchemas(source);
+
   // Keep only the last 10 turns as context — this is a stateless Q&A
   // assistant, not a long-running conversation that needs full history.
   const history = body.messages.slice(-10);
 
   const messages: ChatCompletionMessageParam[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: getSystemPrompt(source) },
     ...history.map((m) => ({ role: m.role, content: m.content }) as ChatCompletionMessageParam),
   ];
 
@@ -84,7 +96,7 @@ export async function POST(req: NextRequest) {
             const completion = await getOpenAI().chat.completions.create({
               model: CHAT_MODEL,
               messages,
-              tools: TOOL_SCHEMAS,
+              tools: toolSchemas,
               temperature: 0.2,
             });
             const choice = completion.choices[0];
@@ -107,7 +119,7 @@ export async function POST(req: NextRequest) {
               toolCallLog.push({ name: call.function.name, args });
               let result: unknown;
               try {
-                result = await runTool(call.function.name, args, user);
+                result = await runTool(call.function.name, args, user, source);
               } catch (e) {
                 result = { error: e instanceof Error ? e.message : 'Tool failed' };
               }

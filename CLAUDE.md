@@ -4,11 +4,19 @@ Guidance for Claude Code / any agent working in this repo.
 
 ## What this is
 
-A **read-only AI monitoring/Q&A layer** on top of Order-to-Delivery (O2D) —
-the separate, already-in-production system at
+A **read-only AI monitoring/Q&A layer**, originally built on top of
+Order-to-Delivery (O2D) — the separate, already-in-production system at
 `C:\Users\ACER\Desktop\Order to delivery\at-order-to-dispatch-backend` +
-`at-order-to-dispatch-frontend`. This service reads O2D's own database and
-gives a production incharge two things:
+`at-order-to-dispatch-frontend` — and, added 2026-09-13, ALSO on top of
+Jewel Factory's own production database (`C:\Users\ACER\Desktop\Jewel-
+Factory`). One dashboard, one login, ONE UI — a small source toggle at the
+top ("Order to Delivery" / "Jewel Factory") switches which business's data
+the identical-looking dashboard/chat is reading, never both at once. Each
+source reads a genuinely different Postgres database with its own minimal
+schema subset and its own tool functions (see "Two data sources" below).
+
+For whichever source is active, this gives a production incharge /
+manufacturer two things:
 
 1. **A fixed dashboard** — three always-shown insights (delayed orders,
    stage bottlenecks, karigar workload) plus a short AI-written narrative
@@ -16,11 +24,13 @@ gives a production incharge two things:
    scheduled job).
 2. **A free-text chat** — the same underlying data, queryable in natural
    language ("which urgent orders are late?", "how much work does Ramesh
-   have?"), via OpenAI function-calling over a FIXED set of tool functions.
+   have?"), via OpenAI function-calling over a FIXED set of tool functions,
+   scoped to whichever source is currently selected.
 
-**This service NEVER writes to the database.** No order is ever changed,
-no karigar ever reassigned, no stage ever advanced from here. It only
-observes and reports — see "Core rule: read-only, no exceptions" below.
+**This service NEVER writes to either database.** No order is ever
+changed, no karigar ever reassigned, no stage ever advanced from here. It
+only observes and reports — see "Core rule: read-only, no exceptions"
+below, which applies identically to both data sources.
 
 ## Why one repo, one deploy (not backend+frontend split)
 
@@ -39,6 +49,56 @@ see "Database" below) + Tailwind v4 (CSS-first) + `openai` SDK (`gpt-4o` by
 default) + `jsonwebtoken` (verifies O2D's own tokens, issues none of its
 own). No separate ORM/API framework, no state-management library — this is
 a small, single-page app (one dashboard+chat page, one login page).
+
+## Two data sources — O2D and Jewel Factory, never mixed
+
+- **O2D** (`source: 'o2d'`, the default/original): `prisma/schema.prisma` +
+  `lib/prisma.ts` (`prisma` client) + `lib/tools.ts` + O2D's own login.
+- **Jewel Factory** (`source: 'jf'`, added 2026-09-13): a SEPARATE Prisma
+  schema (`prisma/jewel-factory/schema.prisma`, generated into its own
+  output path `node_modules/.prisma/client-jf` so it never collides with
+  the O2D client) + `lib/prisma-jf.ts` (`prismaJf` client, its own
+  `DATABASE_URL_JEWEL_FACTORY` connection) + `lib/tools-jf.ts`.
+
+Both `lib/tools.ts` and `lib/tools-jf.ts` export the same five function
+names (`getSummary`, `getDelayedOrders`, `getStageBottlenecks`,
+`getKarigarLoad`, `getOrderByNumber`, `searchOrders`) with source-specific
+suffixed exports on the JF side (`getSummaryJf`, etc.) — `lib/openai.ts`'s
+`getToolSchemas(source)`/`getSystemPrompt(source)`/`runTool(name, args,
+user, source)` dispatch to the right file based on `source`, and
+`app/api/insights/route.ts` (`?source=` query param) /
+`app/api/chat/route.ts` (`source` in the request body) thread it through
+from the frontend's tab selection. **Never let a chat request reach the
+other source's tools/database** — this is the whole reason `source` is
+threaded explicitly through every layer instead of inferred.
+
+**Jewel Factory has three order tables** (`B2bOrder` = "Catalogue order",
+`KioskOrder` = "Store Customer order", `CustomDesignOrder` = "Customised
+order") where O2D has one `Order` table — `lib/tools-jf.ts`'s
+`fetchActiveUnifiedOrders()` merges all three into one shape before
+computing insights, mirroring how Jewel Factory's own manufacturer portal
+merges them for display. **Customer PII is structurally excluded** —
+`KioskOrder.customerName/Phone/Email`/`deliveryAddress` aren't even
+declared in `prisma/jewel-factory/schema.prisma`, so no query here could
+select them by accident, matching Jewel Factory's own "manufacturer never
+sees customer PII" rule.
+
+**O2D linkage**: a `CustomDesignOrder` with `o2dOrderId` set has already
+been forwarded to O2D (Jewel Factory's own O2D integration — see Jewel
+Factory's own CLAUDE.md) — its real production tracking now lives in O2D's
+`Order` table, i.e. the O2D tab of THIS SAME dashboard. Every Jewel Factory
+active/delayed query excludes `o2dOrderId: null`-mismatched rows (only
+counts ones still `null`) specifically to avoid double-counting the same
+underlying piece of work against both tabs.
+
+**Adding a THIRD source later**: follow this same pattern — a new
+`prisma/<name>/schema.prisma` with its own `output`, a new `lib/prisma-
+<name>.ts`, a new `lib/tools-<name>.ts`, extend `Source` in `lib/openai.ts`
+and the `SOURCES` array in `app/page.tsx`. Don't try to make one generic
+"tools" file that branches internally on source — the whole point of the
+per-source-file split is that each business's actual schema/field-names
+genuinely differ, and mixing them inline invites exactly the kind of
+data-shape confusion this split is meant to prevent.
 
 ## Database — same DB as O2D, minimal schema subset, READ ONLY
 
@@ -102,11 +162,13 @@ returned token in `localStorage`.
 **Gated to ADMIN/SUPER_ADMIN only** (`lib/auth.ts`) — same role check O2D's
 own admin-only pages use. A plain USER account cannot use this service.
 
-**Dev-only bypass**: `SKIP_AUTH_IN_DEV=true` (only takes effect when
-`NODE_ENV !== 'production'`) skips auth entirely and fakes a SUPER_ADMIN —
-for local testing without needing a real O2D login handy. Never set this in
-the Render environment; Render's own `NODE_ENV=production` disables it
-regardless, but don't rely on that alone — never even set the var there.
+**Testing-only bypass**: `SKIP_AUTH_IN_DEV=true` (+ matching
+`NEXT_PUBLIC_SKIP_AUTH_IN_DEV=true` for the frontend redirect check) skips
+auth entirely and fakes a SUPER_ADMIN — deliberately NOT gated on
+`NODE_ENV`, so it also works on Render for early testing before real login
+is wired up. ⚠️ While set, ANYONE who reaches the deployed URL sees every
+order/karigar with no login at all — set back to `false` (or unset both)
+once real login is in use for anything beyond throwaway testing.
 
 **No SSO/seamless-login from O2D yet** — clicking through from O2D straight
 into this service without re-entering credentials would require a small
@@ -168,18 +230,34 @@ account can't reach this service at all (see Auth above), so there's no
 Docker, one image, one Render Web Service — **no `render.yaml` blueprint**
 (explicit choice; configure the service directly in the Render dashboard:
 build command is the Dockerfile itself, so just point Render at this repo
-with "Docker" as the runtime). Standalone Next.js output
-(`next.config.ts`'s `output: 'standalone'`) keeps the image small.
+with "Docker" as the runtime). Runs `next start` on the FULL build output,
+deliberately NOT `output: 'standalone'` — see the Dockerfile's own comment
+for the full 2026-09-10 diagnostic trail on why the standalone build is
+unreachable on this Render setup specifically. Port is hardcoded to 10000
+in the Dockerfile (`EXPOSE`/`ENV PORT`) — don't set a `PORT` env var in the
+Render dashboard, it would override that and can reintroduce the same
+routing failure.
 
 Env vars needed on Render (see `.env.example` for the full list/comments):
-`DATABASE_URL`, `JWT_SECRET` (must match O2D's own), `OPENAI_API_KEY`,
-`NEXT_PUBLIC_O2D_API_URL`. Never set `SKIP_AUTH_IN_DEV` there.
+`DATABASE_URL`, `DATABASE_URL_JEWEL_FACTORY`, `JWT_SECRET` (must match
+O2D's own), `OPENAI_API_KEY`, `NEXT_PUBLIC_O2D_API_URL`.
+`NEXT_PUBLIC_SKIP_AUTH_IN_DEV`/`SKIP_AUTH_IN_DEV` must be declared as
+Docker `ARG`s in the Dockerfile's builder stage (any `NEXT_PUBLIC_*` var
+needs this — Next.js inlines them at BUILD time, and Render's dashboard
+env vars only reach the build step for vars explicitly declared as `ARG`)
+before `npm run build` runs, or they'll silently bake in as `undefined`
+regardless of what the dashboard shows.
 
 ## Commands
 
 ```bash
 npm install
 npm run dev        # http://localhost:3100 (or $PORT)
-npm run build      # prisma generate + next build
+npm run build      # prisma generate (O2D) + prisma generate (Jewel Factory) + next build
 npm run typecheck
+```
+
+Regenerating just the Jewel Factory client after editing its schema:
+```bash
+npx prisma generate --schema=./prisma/jewel-factory/schema.prisma
 ```

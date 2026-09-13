@@ -6,21 +6,72 @@ import { AlertTriangle, Clock, Hammer, Loader2, LogOut, RefreshCw, Send, Sparkle
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import { clearToken, fetchInsights, getToken, sendChatStream } from '@/lib/client-api';
+import { clearToken, fetchInsights, getToken, sendChatStream, type Source } from '@/lib/client-api';
 import type { DelayedOrder, KarigarLoad, StageBottleneck, Summary } from '@/lib/tools';
+import type { DelayedOrderJf, KarigarLoadJf, StageBottleneckJf, SummaryJf } from '@/lib/tools-jf';
+
+// The dashboard renders identically regardless of source — only the data
+// underneath changes. O2D's and Jewel Factory's tools return slightly
+// different field names (companyName vs storeName, karigarName+karigarCode
+// vs karigarCode-only) because they come from genuinely different
+// databases/schemas, so each source's raw rows are normalized into this one
+// shared display shape right after fetching, rather than duplicating the
+// whole card/list JSX per source.
+type DisplayOrder = { orderNo: string; primaryLabel: string; subLabel: string; daysLate: number };
+type DisplayKarigar = { key: string; label: string; activeOrderCount: number; delayedOrderCount: number };
 
 type InsightsData = {
-  summary: Summary;
-  delayedOrders: DelayedOrder[];
-  stageBottlenecks: StageBottleneck[];
-  karigarLoad: KarigarLoad[];
+  summary: Summary | SummaryJf;
+  delayedOrders: DisplayOrder[];
+  stageBottlenecks: StageBottleneck[] | StageBottleneckJf[];
+  karigarLoad: DisplayKarigar[];
   narrative: string | null;
 };
 
+function normalizeDelayedOrders(source: Source, rows: DelayedOrder[] | DelayedOrderJf[]): DisplayOrder[] {
+  if (source === 'jf') {
+    return (rows as DelayedOrderJf[]).map((o) => ({
+      orderNo: o.orderNo,
+      primaryLabel: `${o.orderNo} · ${o.storeName}`,
+      subLabel: `${o.kind} · ${o.stage}${o.karigarCode ? ` · ${o.karigarCode}` : ''}`,
+      daysLate: o.daysLate,
+    }));
+  }
+  return (rows as DelayedOrder[]).map((o) => ({
+    orderNo: o.orderNo,
+    primaryLabel: `${o.orderNo} · ${o.companyName}`,
+    subLabel: `${o.stage}${o.karigarName ? ` · ${o.karigarName}` : ''}`,
+    daysLate: o.daysLate,
+  }));
+}
+
+function normalizeKarigarLoad(source: Source, rows: KarigarLoad[] | KarigarLoadJf[]): DisplayKarigar[] {
+  if (source === 'jf') {
+    return (rows as KarigarLoadJf[]).map((k) => ({
+      key: k.karigarCode,
+      label: k.karigarCode,
+      activeOrderCount: k.activeOrderCount,
+      delayedOrderCount: k.delayedOrderCount,
+    }));
+  }
+  return (rows as KarigarLoad[]).map((k) => ({
+    key: k.karigarId,
+    label: `${k.karigarName} (${k.karigarCode})`,
+    activeOrderCount: k.activeOrderCount,
+    delayedOrderCount: k.delayedOrderCount,
+  }));
+}
+
 type ChatMsg = { role: 'user' | 'assistant'; content: string };
+
+const SOURCES: { value: Source; label: string }[] = [
+  { value: 'o2d', label: 'Order to Delivery' },
+  { value: 'jf', label: 'Jewel Factory' },
+];
 
 export default function DashboardPage() {
   const router = useRouter();
+  const [source, setSource] = useState<Source>('o2d');
   const [data, setData] = useState<InsightsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,12 +80,16 @@ export default function DashboardPage() {
   const [chatBusy, setChatBusy] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  async function load() {
+  async function load(activeSource: Source) {
     setLoading(true);
     setError(null);
     try {
-      const insights = await fetchInsights();
-      setData(insights);
+      const insights = await fetchInsights(activeSource);
+      setData({
+        ...insights,
+        delayedOrders: normalizeDelayedOrders(activeSource, insights.delayedOrders),
+        karigarLoad: normalizeKarigarLoad(activeSource, insights.karigarLoad),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load insights');
     } finally {
@@ -52,13 +107,25 @@ export default function DashboardPage() {
       router.replace('/login');
       return;
     }
-    void load();
+    void load('o2d');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
+
+  function switchSource(next: Source) {
+    if (next === source) return;
+    setSource(next);
+    setData(null);
+    // Chat is scoped to whichever business is currently selected (see
+    // lib/openai.ts's Source-keyed tool schemas) — clearing history on
+    // switch avoids a stale question/answer from one business's data
+    // sitting next to the other's in the same thread.
+    setChatMessages([]);
+    void load(next);
+  }
 
   async function submitChat(e: React.FormEvent) {
     e.preventDefault();
@@ -73,13 +140,17 @@ export default function DashboardPage() {
     // reply visibly type itself out instead of appearing all at once.
     setChatMessages((cur) => [...cur, { role: 'assistant', content: '' }]);
     try {
-      await sendChatStream(next, (textSoFar) => {
-        setChatMessages((cur) => {
-          const updated = [...cur];
-          updated[updated.length - 1] = { role: 'assistant', content: textSoFar };
-          return updated;
-        });
-      });
+      await sendChatStream(
+        next,
+        (textSoFar) => {
+          setChatMessages((cur) => {
+            const updated = [...cur];
+            updated[updated.length - 1] = { role: 'assistant', content: textSoFar };
+            return updated;
+          });
+        },
+        source,
+      );
     } catch (e) {
       setChatMessages((cur) => {
         const updated = [...cur];
@@ -106,12 +177,12 @@ export default function DashboardPage() {
           </span>
           <div>
             <h1 className="text-base font-semibold leading-tight">AI Production Incharge</h1>
-            <p className="text-xs text-[var(--muted-foreground)]">Read-only insights · Order to Delivery</p>
+            <p className="text-xs text-[var(--muted-foreground)]">Read-only insights · {SOURCES.find((s) => s.value === source)?.label}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void load()}
+            onClick={() => void load(source)}
             disabled={loading}
             className="flex h-9 items-center gap-1.5 rounded-lg border border-[var(--accent)] bg-[var(--accent)] px-3 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
           >
@@ -127,151 +198,174 @@ export default function DashboardPage() {
       </header>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6">
-      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-
-      {loading && !data && (
-        <div className="flex items-center gap-2 py-16 text-[var(--muted-foreground)]">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading live production data…
+        {/* Source switcher — same look/data-shape either way, only the
+            underlying business's data changes. See the file header comment
+            on why the raw rows are normalized before rendering. */}
+        <div className="flex w-fit gap-1 rounded-lg border border-[var(--border)] bg-[var(--card)] p-1">
+          {SOURCES.map((s) => (
+            <button
+              key={s.value}
+              onClick={() => switchSource(s.value)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                source === s.value
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
+                  : 'text-[var(--muted-foreground)] hover:bg-[var(--accent)]'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
         </div>
-      )}
 
-      {data && (
-        <>
-          {/* Top-line counts */}
-          <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatCard label="Active orders" value={data.summary.totalActive} />
-            <StatCard label="Delayed" value={data.summary.totalDelayed} tone="warn" />
-            <StatCard label="Urgent" value={data.summary.totalUrgent} tone="danger" />
-            <StatCard label="Completed today" value={data.summary.totalCompletedToday} tone="good" />
-          </section>
+        {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
-          {/* AI narrative briefing */}
-          {data.narrative && (
-            <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-              <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-                <Sparkles className="h-3.5 w-3.5" /> Briefing
-              </p>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{data.narrative}</p>
-            </section>
-          )}
-
-          <div className="grid gap-4 lg:grid-cols-3">
-            {/* Delayed orders */}
-            <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-              <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Clock className="h-4 w-4 text-amber-600" /> Delayed orders</h2>
-              <div className="max-h-80 space-y-1.5 overflow-y-auto">
-                {data.delayedOrders.length === 0 && <p className="text-xs text-[var(--muted-foreground)]">Nothing overdue right now.</p>}
-                {data.delayedOrders.map((o) => (
-                  <div key={o.orderNo} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{o.orderNo} · {o.companyName}</p>
-                      <p className="truncate text-[var(--muted-foreground)]">{o.stage}{o.karigarName ? ` · ${o.karigarName}` : ''}</p>
-                    </div>
-                    <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700">{o.daysLate}d late</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            {/* Stage bottlenecks */}
-            <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-              <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><AlertTriangle className="h-4 w-4 text-orange-600" /> Stage bottlenecks</h2>
-              <div className="max-h-80 space-y-1.5 overflow-y-auto">
-                {data.stageBottlenecks.map((s) => (
-                  <div key={s.stage} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{s.stage}</p>
-                      {s.oldestOrderNo && <p className="truncate text-[var(--muted-foreground)]">Oldest: {s.oldestOrderNo} ({s.oldestOrderAgeDays}d)</p>}
-                    </div>
-                    <span className="shrink-0 rounded-full bg-[var(--secondary)] px-2 py-0.5 font-semibold">{s.orderCount}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            {/* Karigar load */}
-            <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-              <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Hammer className="h-4 w-4 text-blue-600" /> Karigar load</h2>
-              <div className="max-h-80 space-y-1.5 overflow-y-auto">
-                {data.karigarLoad.map((k) => (
-                  <div key={k.karigarId} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{k.karigarName} <span className="text-[var(--muted-foreground)]">({k.karigarCode})</span></p>
-                      {k.delayedOrderCount > 0 && <p className="text-red-600">{k.delayedOrderCount} delayed</p>}
-                    </div>
-                    <span className="shrink-0 rounded-full bg-[var(--secondary)] px-2 py-0.5 font-semibold">{k.activeOrderCount}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
+        {loading && !data && (
+          <div className="flex items-center gap-2 py-16 text-[var(--muted-foreground)]">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading live production data…
           </div>
+        )}
 
-          {/* Chat */}
-          <section className="flex min-h-[420px] flex-col rounded-xl border border-[var(--border)] bg-[var(--card)]">
-            <div className="border-b border-[var(--border)] px-4 py-3">
-              <h2 className="text-sm font-semibold">Ask a question</h2>
-              <p className="text-xs text-[var(--muted-foreground)]">e.g. "Which urgent orders are late?" · "How much work does Ramesh have?"</p>
+        {data && (
+          <>
+            {/* Top-line counts */}
+            <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <StatCard label="Active orders" value={data.summary.totalActive} />
+              <StatCard label="Delayed" value={data.summary.totalDelayed} tone="warn" />
+              <StatCard label="Urgent" value={data.summary.totalUrgent} tone="danger" />
+              <StatCard label="Completed today" value={data.summary.totalCompletedToday} tone="good" />
+            </section>
+
+            {/* AI narrative briefing */}
+            {data.narrative && (
+              <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+                <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+                  <Sparkles className="h-3.5 w-3.5" /> Briefing
+                </p>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{data.narrative}</p>
+              </section>
+            )}
+
+            <div className="grid gap-4 lg:grid-cols-3">
+              {/* Delayed orders */}
+              <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+                <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Clock className="h-4 w-4 text-amber-600" /> Delayed orders</h2>
+                <div className="max-h-80 space-y-1.5 overflow-y-auto">
+                  {data.delayedOrders.length === 0 && <p className="text-xs text-[var(--muted-foreground)]">Nothing overdue right now.</p>}
+                  {data.delayedOrders.map((o) => (
+                    <div key={o.orderNo} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{o.primaryLabel}</p>
+                        <p className="truncate text-[var(--muted-foreground)]">{o.subLabel}</p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700">{o.daysLate}d late</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {/* Stage bottlenecks */}
+              <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+                <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><AlertTriangle className="h-4 w-4 text-orange-600" /> Stage bottlenecks</h2>
+                <div className="max-h-80 space-y-1.5 overflow-y-auto">
+                  {data.stageBottlenecks.map((s) => (
+                    <div key={s.stage} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{s.stage}</p>
+                        {s.oldestOrderNo && <p className="truncate text-[var(--muted-foreground)]">Oldest: {s.oldestOrderNo} ({s.oldestOrderAgeDays}d)</p>}
+                      </div>
+                      <span className="shrink-0 rounded-full bg-[var(--secondary)] px-2 py-0.5 font-semibold">{s.orderCount}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {/* Karigar load */}
+              <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+                <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Hammer className="h-4 w-4 text-blue-600" /> Karigar load</h2>
+                <div className="max-h-80 space-y-1.5 overflow-y-auto">
+                  {data.karigarLoad.map((k) => (
+                    <div key={k.key} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{k.label}</p>
+                        {k.delayedOrderCount > 0 && <p className="text-red-600">{k.delayedOrderCount} delayed</p>}
+                      </div>
+                      <span className="shrink-0 rounded-full bg-[var(--secondary)] px-2 py-0.5 font-semibold">{k.activeOrderCount}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
             </div>
-            <div className="flex-1 space-y-3 overflow-y-auto p-4">
-              {chatMessages.length === 0 && (
-                <p className="text-sm text-[var(--muted-foreground)]">Ask anything about current orders, delays, or karigar workload.</p>
-              )}
-              {chatMessages.map((m, i) => {
-                const isLastAssistant = m.role === 'assistant' && i === chatMessages.length - 1;
-                const stillWaitingForFirstChunk = isLastAssistant && chatBusy && m.content === '';
-                if (stillWaitingForFirstChunk) return null; // covered by the "Thinking…" bubble below
-                return (
-                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div
-                      className={`rounded-lg px-3 py-2 text-sm ${
-                        m.role === 'user'
-                          ? 'max-w-[80%] whitespace-pre-wrap bg-[var(--primary)] text-[var(--primary-foreground)]'
-                          : 'max-w-[95%] min-w-0 bg-[var(--muted)]'
-                      }`}
-                    >
-                      {m.role === 'assistant' ? (
-                        <div className="chat-markdown">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{ table: ({ children }) => <div className="table-wrap"><table>{children}</table></div> }}
-                          >
-                            {m.content}
-                          </ReactMarkdown>
-                        </div>
-                      ) : (
-                        m.content
-                      )}
+
+            {/* Chat */}
+            <section className="flex min-h-[420px] flex-col rounded-xl border border-[var(--border)] bg-[var(--card)]">
+              <div className="border-b border-[var(--border)] px-4 py-3">
+                <h2 className="text-sm font-semibold">Ask a question</h2>
+                <p className="text-xs text-[var(--muted-foreground)]">
+                  {source === 'jf'
+                    ? 'e.g. "Which retailer\'s order is late?" · "How much work does karigar A54 have?"'
+                    : 'e.g. "Which urgent orders are late?" · "How much work does Ramesh have?"'}
+                </p>
+              </div>
+              <div className="flex-1 space-y-3 overflow-y-auto p-4">
+                {chatMessages.length === 0 && (
+                  <p className="text-sm text-[var(--muted-foreground)]">Ask anything about current orders, delays, or karigar workload.</p>
+                )}
+                {chatMessages.map((m, i) => {
+                  const isLastAssistant = m.role === 'assistant' && i === chatMessages.length - 1;
+                  const stillWaitingForFirstChunk = isLastAssistant && chatBusy && m.content === '';
+                  if (stillWaitingForFirstChunk) return null; // covered by the "Thinking…" bubble below
+                  return (
+                    <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div
+                        className={`rounded-lg px-3 py-2 text-sm ${
+                          m.role === 'user'
+                            ? 'max-w-[80%] whitespace-pre-wrap bg-[var(--primary)] text-[var(--primary-foreground)]'
+                            : 'max-w-[95%] min-w-0 bg-[var(--muted)]'
+                        }`}
+                      >
+                        {m.role === 'assistant' ? (
+                          <div className="chat-markdown">
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              components={{ table: ({ children }) => <div className="table-wrap"><table>{children}</table></div> }}
+                            >
+                              {m.content}
+                            </ReactMarkdown>
+                          </div>
+                        ) : (
+                          m.content
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {chatBusy && chatMessages[chatMessages.length - 1]?.content === '' && (
+                  <div className="flex justify-start">
+                    <div className="flex items-center gap-2 rounded-lg bg-[var(--muted)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Thinking…
                     </div>
                   </div>
-                );
-              })}
-              {chatBusy && chatMessages[chatMessages.length - 1]?.content === '' && (
-                <div className="flex justify-start">
-                  <div className="flex items-center gap-2 rounded-lg bg-[var(--muted)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Thinking…
-                  </div>
-                </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
-            <form onSubmit={submitChat} className="flex items-center gap-2 border-t border-[var(--border)] p-3">
-              <input
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask about orders, delays, karigar load…"
-                className="h-10 flex-1 rounded-md border border-[var(--input)] bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--ring)]"
-              />
-              <button
-                type="submit"
-                disabled={chatBusy || !chatInput.trim()}
-                className="flex h-10 w-10 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            </form>
-          </section>
-        </>
-      )}
+                )}
+                <div ref={chatEndRef} />
+              </div>
+              <form onSubmit={submitChat} className="flex items-center gap-2 border-t border-[var(--border)] p-3">
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Ask about orders, delays, karigar load…"
+                  className="h-10 flex-1 rounded-md border border-[var(--input)] bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                />
+                <button
+                  type="submit"
+                  disabled={chatBusy || !chatInput.trim()}
+                  className="flex h-10 w-10 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50"
+                >
+                  <Send className="h-4 w-4" />
+                </button>
+              </form>
+            </section>
+          </>
+        )}
       </main>
     </div>
   );

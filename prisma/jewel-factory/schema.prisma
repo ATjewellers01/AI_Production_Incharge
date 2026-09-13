@@ -1,0 +1,176 @@
+// AI Production Incharge — READ-ONLY view of Jewel Factory's production
+// Postgres database (AWS RDS, database "jewel_factory"), added 2026-09-13.
+// This is a deliberately minimal subset of Jewel-Factory's own
+// prisma/schema.prisma: only the models/fields this service actually reads
+// (B2bOrder, B2bOrderItem, KioskOrder, KioskOrderItem, CustomDesignOrder,
+// Karigar, Store, Manufacturer). Every other table in the real database
+// (ManufacturerProduct, Branch, FavoriteProduct, order_messages, cart
+// tables, the whole taxonomy system, etc.) simply isn't declared here —
+// this client never touches them.
+//
+// SCOPE: manufacturer-side data ONLY, matching what a Jewel Factory
+// manufacturer already sees in their own /manufacturer/* portal — which
+// orders, from which retailer (Store), assigned to which karigar, at what
+// status. Customer PII (KioskOrder.customerName/Phone/Email,
+// deliveryAddress) is intentionally NOT selected by any query in
+// lib/tools-jf.ts even though the columns exist here, mirroring Jewel
+// Factory's own "manufacturer never sees customer PII" rule (see Jewel
+// Factory's CLAUDE.md Core rules).
+//
+// SAFETY: this service has ZERO write paths anywhere in its own code (no
+// `.create(`, `.update(`, `.delete(`, `.upsert(` call exists in this repo).
+// This service must NEVER run `prisma migrate` against this database —
+// Jewel Factory's own repo owns that schema's lifecycle exclusively. If a
+// query needs a field/model not listed below, add the SAME field/model
+// definition (copied from Jewel Factory's own prisma/schema.prisma) rather
+// than inventing a new shape — the physical table must match exactly.
+//
+// Generated into its own output path (not the default node_modules/.prisma/
+// client) so this second Prisma Client doesn't collide with the O2D one
+// generated from ../schema.prisma — see lib/prisma-jf.ts for how it's
+// loaded, and package.json's build script for how both get generated.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/client-jf"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrderStatus {
+  PENDING
+  IN_PROCESS
+  GHAT_RECEIVED
+  READY_FOR_DELIVERY
+  DISPATCHED
+  COMPLETED
+  CANCELLED
+}
+
+enum CustomOrderStatus {
+  PENDING
+  IN_PROCESS
+  GHAT_RECEIVED
+  READY_FOR_DELIVERY
+  DISPATCHED
+  COMPLETED
+  CANCELLED
+}
+
+model Manufacturer {
+  id    String @id
+  name  String
+  email String
+
+  @@map("manufacturers")
+}
+
+model Store {
+  id   String  @id
+  name String
+  city String?
+
+  @@map("stores")
+}
+
+model Karigar {
+  id             String @id
+  manufacturerId String @map("manufacturer_id")
+  code           String
+
+  orders CustomDesignOrder[]
+
+  @@map("karigars")
+}
+
+model B2bOrder {
+  id             String      @id
+  storeId        String      @map("store_id")
+  manufacturerId String      @map("manufacturer_id")
+  orderNumber    String      @map("order_number")
+  status         OrderStatus @default(PENDING)
+  deliveryDate   DateTime?   @map("delivery_date") @db.Date
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  items B2bOrderItem[]
+
+  @@map("b2b_orders")
+}
+
+model B2bOrderItem {
+  id                String             @id
+  orderId           String             @map("order_id")
+  order             B2bOrder           @relation(fields: [orderId], references: [id])
+  customisedOrderId String?            @map("customised_order_id")
+  customisedOrder   CustomDesignOrder? @relation(fields: [customisedOrderId], references: [id])
+  quantity          Int
+  status            OrderStatus        @default(PENDING)
+
+  @@map("b2b_order_items")
+}
+
+model KioskOrder {
+  id                String      @id
+  storeId           String      @map("store_id")
+  manufacturerId    String      @map("manufacturer_id")
+  storeNameSnapshot String      @map("store_name_snapshot")
+  orderNumber       String      @map("order_number")
+  status            OrderStatus @default(PENDING)
+  deliveryDate      DateTime?   @map("delivery_date") @db.Date
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  items KioskOrderItem[]
+
+  @@map("kiosk_orders")
+}
+
+model KioskOrderItem {
+  id                String             @id
+  orderId           String             @map("order_id")
+  order             KioskOrder         @relation(fields: [orderId], references: [id])
+  customisedOrderId String?            @map("customised_order_id")
+  customisedOrder   CustomDesignOrder? @relation(fields: [customisedOrderId], references: [id])
+  quantity          Int
+  status            OrderStatus        @default(PENDING)
+
+  @@map("kiosk_order_items")
+}
+
+model CustomDesignOrder {
+  id                   String            @id
+  manufacturerId       String            @map("manufacturer_id")
+  storeId              String            @map("store_id")
+  storeNameSnapshot    String            @map("store_name_snapshot")
+  category             String
+  orderNumber          String            @map("order_number") // JFC-####
+  status               CustomOrderStatus @default(PENDING)
+  orderStage           String?           @map("order_stage") // free text, not enum-backed
+  deliveryDate         DateTime?         @map("delivery_date") @db.Date
+  karigarDeliveryDate  DateTime?         @map("karigar_delivery_date") @db.Date
+  karigarId            String?           @map("karigar_id")
+  karigar              Karigar?          @relation(fields: [karigarId], references: [id])
+  karigarCode          String?           @map("karigar_code")
+  urgent               Boolean           @default(false)
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
+
+  // O2D integration linkage — once set, this order's REAL production
+  // tracking lives in O2D's own Order table (see the AI Production
+  // Incharge's own O2D-side tools.ts), not here. lib/tools-jf.ts must
+  // exclude these from "active"/"delayed" counts to avoid double-counting
+  // the same underlying piece of work against both the O2D tab and this
+  // Jewel Factory tab.
+  o2dOrderId   String?   @map("o2d_order_id")
+  o2dOrderNo   String?   @map("o2d_order_no")
+  o2dSyncedAt  DateTime? @map("o2d_synced_at")
+  o2dSyncError String?   @map("o2d_sync_error")
+
+  b2bItems   B2bOrderItem[]
+  kioskItems KioskOrderItem[]
+
+  @@map("custom_design_orders")
+}

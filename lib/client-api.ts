@@ -54,8 +54,10 @@ async function authedFetch(path: string, init?: RequestInit) {
   return json;
 }
 
-export async function fetchInsights() {
-  const json = await authedFetch('/api/insights');
+export type Source = 'o2d' | 'jf';
+
+export async function fetchInsights(source: Source = 'o2d') {
+  const json = await authedFetch(`/api/insights?source=${source}`);
   return json.data;
 }
 
@@ -74,12 +76,13 @@ type ChatStreamEvent =
 export async function sendChatStream(
   messages: Array<{ role: 'user' | 'assistant'; content: string }>,
   onDelta: (textSoFar: string) => void,
+  source: Source = 'o2d',
 ): Promise<{ reply: string; toolCalls: Array<{ name: string; args: unknown }> }> {
   const token = getToken();
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { Authorization: token ? `Bearer ${token}` : '', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, source }),
   });
 
   if (res.status === 401) {
