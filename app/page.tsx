@@ -92,6 +92,10 @@ export default function DashboardPage() {
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load insights');
+      // Never leave a previous (possibly different-source) load's data
+      // rendering underneath the error banner — a failed refresh/switch
+      // must show ONLY the error, not stale numbers from before it.
+      setData(null);
     } finally {
       setLoading(false);
     }

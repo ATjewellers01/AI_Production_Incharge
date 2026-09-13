@@ -16,9 +16,21 @@ function createPrismaClient() {
   // caused every DB query to fail at runtime (502s in production, even
   // though the build itself succeeded) — Neon's own connection string
   // requires `sslmode=require`.
-  const isLocal = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '');
+  const rawUrl = process.env.DATABASE_URL ?? '';
+  const isLocal = /localhost|127\.0\.0\.1/.test(rawUrl);
+
+  // Strip `?sslmode=...` from the connection string — a `require`/`prefer`/
+  // `verify-ca` value there makes newer pg-connection-string versions apply
+  // libpq-style verify-full semantics REGARDLESS of the separate `ssl`
+  // object below, which broke lib/prisma-jf.ts's RDS connection with
+  // "self-signed certificate in certificate chain" even with
+  // rejectUnauthorized: false explicitly set. Harmless here even though
+  // this specific connection (Neon) hasn't hit it — same underlying `pg`
+  // behavior, so strip it defensively rather than wait for it to bite.
+  const connectionString = rawUrl.replace(/[?&]sslmode=[^&]*/i, '');
+
   const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString,
     max: 5,
     min: 0,
     idleTimeoutMillis: 30_000,
