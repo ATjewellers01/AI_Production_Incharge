@@ -2,6 +2,8 @@ import { PrismaClient } from '../node_modules/.prisma/client-jf';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 
+import { stripSslmode } from './db-url';
+
 // Second Prisma Client, generated from prisma/jewel-factory/schema.prisma
 // into its own output path (node_modules/.prisma/client-jf) so it doesn't
 // collide with the default O2D client this repo already had (lib/prisma.ts,
@@ -13,16 +15,7 @@ const globalForPrismaJf = globalThis as unknown as { prismaJf?: PrismaClient };
 function createPrismaJfClient() {
   const rawUrl = process.env.DATABASE_URL_JEWEL_FACTORY ?? '';
   const isLocal = /localhost|127\.0\.0\.1/.test(rawUrl);
-
-  // A `?sslmode=require` (or prefer/verify-ca) query param in the
-  // connection string makes newer pg-connection-string versions apply
-  // libpq-style verify-full semantics REGARDLESS of the separate `ssl`
-  // object passed below — that's what caused "self-signed certificate in
-  // certificate chain" here even with rejectUnauthorized: false explicitly
-  // set (AWS RDS's cert chain isn't in Node's default trust store, hence
-  // the deliberate rejectUnauthorized:false below). Stripping the query
-  // param makes the explicit `ssl` object the only source of truth.
-  const connectionString = rawUrl.replace(/[?&]sslmode=[^&]*/i, '');
+  const connectionString = stripSslmode(rawUrl);
 
   const pool = new Pool({
     connectionString,

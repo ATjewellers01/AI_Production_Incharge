@@ -2,6 +2,8 @@ import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 
+import { stripSslmode } from './db-url';
+
 // Matches at-order-to-dispatch-backend's own src/lib/prisma.ts (Prisma 7
 // driver-adapter model) — same SSL-for-RDS heuristic, smaller pool since
 // this service is read-only, low-traffic (a dashboard load + occasional
@@ -18,16 +20,7 @@ function createPrismaClient() {
   // requires `sslmode=require`.
   const rawUrl = process.env.DATABASE_URL ?? '';
   const isLocal = /localhost|127\.0\.0\.1/.test(rawUrl);
-
-  // Strip `?sslmode=...` from the connection string — a `require`/`prefer`/
-  // `verify-ca` value there makes newer pg-connection-string versions apply
-  // libpq-style verify-full semantics REGARDLESS of the separate `ssl`
-  // object below, which broke lib/prisma-jf.ts's RDS connection with
-  // "self-signed certificate in certificate chain" even with
-  // rejectUnauthorized: false explicitly set. Harmless here even though
-  // this specific connection (Neon) hasn't hit it — same underlying `pg`
-  // behavior, so strip it defensively rather than wait for it to bite.
-  const connectionString = rawUrl.replace(/[?&]sslmode=[^&]*/i, '');
+  const connectionString = stripSslmode(rawUrl);
 
   const pool = new Pool({
     connectionString,
