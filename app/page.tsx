@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, Clock, Hammer, Loader2, LogOut, RefreshCw, Send, Sparkles } from 'lucide-react';
+import { AlertTriangle, Boxes, Clock, Factory, Hammer, Loader2, LogOut, MessageCircle, RefreshCw, Send, Sparkles, Truck, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -118,6 +118,8 @@ export default function DashboardPage() {
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [activeSection, setActiveSection] = useState<string>('section-o2d');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   async function loadAll() {
@@ -168,6 +170,25 @@ export default function DashboardPage() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
+
+  useEffect(() => {
+    // Highlights whichever source's section is currently in view in the
+    // left sidebar, so it stays in sync with scroll position rather than
+    // only updating on a manual nav click.
+    const ids = ['section-o2d', 'section-jf', 'section-erp'];
+    const elements = ids.map((id) => document.getElementById(id)).filter((el): el is HTMLElement => el !== null);
+    if (elements.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible[0]) setActiveSection(visible[0].target.id);
+      },
+      { rootMargin: '-100px 0px -70% 0px', threshold: 0 },
+    );
+    elements.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [o2dData, jfData, erpData]);
 
   function switchChatSource(next: Source) {
     if (next === chatSource) return;
@@ -255,44 +276,45 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6">
-        {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+      <div className="mx-auto flex max-w-7xl items-start">
+        {/* Left sidebar — source navigation, replaces the earlier tab
+            switcher/overview-cards-only approach. Active section highlight
+            tracks scroll position via the IntersectionObserver above. */}
+        <nav className="sticky top-[58px] hidden h-[calc(100dvh-58px)] w-56 shrink-0 flex-col gap-1 overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] p-3 sm:flex">
+          <SidebarLink
+            icon={<Truck className="h-4 w-4" />}
+            label="Order to Delivery"
+            active={activeSection === 'section-o2d'}
+            onClick={() => scrollTo('section-o2d')}
+            stat={o2dData ? `${o2dData.summary.totalActive} active` : undefined}
+          />
+          <SidebarLink
+            icon={<Boxes className="h-4 w-4" />}
+            label="Jewel Factory"
+            active={activeSection === 'section-jf'}
+            onClick={() => scrollTo('section-jf')}
+            stat={jfData ? `${jfData.summary.totalActive} active` : undefined}
+          />
+          <SidebarLink
+            icon={<Factory className="h-4 w-4" />}
+            label="ERP"
+            active={activeSection === 'section-erp'}
+            onClick={() => scrollTo('section-erp')}
+            stat={erpData ? `${erpData.jobPipeline.totalOrders} active` : undefined}
+          />
+        </nav>
 
-        {loading && !anyData && (
-          <div className="flex items-center gap-2 py-16 text-[var(--muted-foreground)]">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading live production data…
-          </div>
-        )}
+        <main className="flex min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6">
+          {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
-        {anyData && (
-          <>
-            {/* Overview row — one glance across all three sources, click to
-                jump to that section. */}
-            <section className="grid gap-3 sm:grid-cols-3">
-              <OverviewCard
-                label="Order to Delivery"
-                onClick={() => scrollTo('section-o2d')}
-                active={o2dData?.summary.totalActive}
-                delayed={o2dData?.summary.totalDelayed}
-                urgent={o2dData?.summary.totalUrgent}
-              />
-              <OverviewCard
-                label="Jewel Factory"
-                onClick={() => scrollTo('section-jf')}
-                active={jfData?.summary.totalActive}
-                delayed={jfData?.summary.totalDelayed}
-                urgent={jfData?.summary.totalUrgent}
-              />
-              <OverviewCard
-                label="ERP"
-                onClick={() => scrollTo('section-erp')}
-                active={erpData?.jobPipeline.totalOrders}
-                delayed={undefined}
-                urgent={erpData?.alerts.length}
-                urgentLabel="alerts"
-              />
-            </section>
+          {loading && !anyData && (
+            <div className="flex items-center gap-2 py-16 text-[var(--muted-foreground)]">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading live production data…
+            </div>
+          )}
 
+          {anyData && (
+            <>
             {/* Comparison chart — O2D vs Jewel Factory active/delayed/urgent
                 counts side by side, the one place a chart genuinely helps
                 compare across sources at a glance. */}
@@ -345,94 +367,122 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {/* Chat — one box, scoped by its own inline source dropdown so a
-                single unified page can still ask a question about any one
-                source without mixing data across them. */}
-            <section className="flex min-h-[420px] flex-col rounded-xl border border-[var(--border)] bg-[var(--card)]">
-              <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
-                <div>
-                  <h2 className="text-sm font-semibold">Ask the AI agent</h2>
-                  <p className="text-xs text-[var(--muted-foreground)]">
-                    {chatSource === 'jf'
-                      ? 'e.g. "Which retailer\'s order is late?" · "How much work does karigar A54 have?"'
-                      : chatSource === 'erp'
-                        ? 'e.g. "Which department has the worst recovery?" · "How is karigar Ramesh performing?"'
-                        : 'e.g. "Which urgent orders are late?" · "How much work does Ramesh have?"'}
-                  </p>
-                </div>
-                <select
-                  value={chatSource}
-                  onChange={(e) => switchChatSource(e.target.value as Source)}
-                  className="h-8 shrink-0 rounded-md border border-[var(--border)] bg-[var(--muted)] px-2 text-xs font-medium outline-none"
-                >
-                  {SOURCES.map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex-1 space-y-3 overflow-y-auto p-4">
-                {chatMessages.length === 0 && (
-                  <p className="text-sm text-[var(--muted-foreground)]">
-                    Ask anything about {SOURCES.find((s) => s.value === chatSource)?.label}'s current data.
-                  </p>
-                )}
-                {chatMessages.map((m, i) => {
-                  const isLastAssistant = m.role === 'assistant' && i === chatMessages.length - 1;
-                  const stillWaitingForFirstChunk = isLastAssistant && chatBusy && m.content === '';
-                  if (stillWaitingForFirstChunk) return null; // covered by the "Thinking…" bubble below
-                  return (
-                    <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div
-                        className={`rounded-lg px-3 py-2 text-sm ${
-                          m.role === 'user'
-                            ? 'max-w-[80%] whitespace-pre-wrap bg-[var(--primary)] text-[var(--primary-foreground)]'
-                            : 'max-w-[95%] min-w-0 bg-[var(--muted)]'
-                        }`}
-                      >
-                        {m.role === 'assistant' ? (
-                          <div className="chat-markdown">
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              components={{ table: ({ children }) => <div className="table-wrap"><table>{children}</table></div> }}
-                            >
-                              {m.content}
-                            </ReactMarkdown>
-                          </div>
-                        ) : (
-                          m.content
-                        )}
+            </>
+          )}
+        </main>
+      </div>
+
+      {/* Floating chat launcher — bottom-right icon button, matching the
+          common "chat widget" convention rather than a chat box sitting
+          inline at the bottom of a long scrolling page. */}
+      {!chatOpen && (
+        <button
+          onClick={() => setChatOpen(true)}
+          aria-label="Open AI agent chat"
+          className="fixed bottom-5 right-5 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--primary)] text-[var(--primary-foreground)] shadow-lg transition-transform hover:scale-105"
+        >
+          <MessageCircle className="h-6 w-6" />
+        </button>
+      )}
+
+      {chatOpen && (
+        <section className="fixed bottom-5 right-5 z-30 flex h-[min(600px,calc(100dvh-2.5rem))] w-[min(380px,calc(100vw-2.5rem))] flex-col rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--primary)] text-[var(--primary-foreground)]">
+                <Sparkles className="h-3.5 w-3.5" />
+              </span>
+              <h2 className="text-sm font-semibold">Ask the AI agent</h2>
+            </div>
+            <button
+              onClick={() => setChatOpen(false)}
+              aria-label="Close chat"
+              className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-2">
+            <p className="text-xs text-[var(--muted-foreground)]">
+              {chatSource === 'jf'
+                ? 'e.g. "Which retailer\'s order is late?"'
+                : chatSource === 'erp'
+                  ? 'e.g. "Which department has the worst recovery?"'
+                  : 'e.g. "Which urgent orders are late?"'}
+            </p>
+            <select
+              value={chatSource}
+              onChange={(e) => switchChatSource(e.target.value as Source)}
+              className="h-7 shrink-0 rounded-md border border-[var(--border)] bg-[var(--muted)] px-2 text-xs font-medium outline-none"
+            >
+              {SOURCES.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex-1 space-y-3 overflow-y-auto p-4">
+            {chatMessages.length === 0 && (
+              <p className="text-sm text-[var(--muted-foreground)]">
+                Ask anything about {SOURCES.find((s) => s.value === chatSource)?.label}'s current data.
+              </p>
+            )}
+            {chatMessages.map((m, i) => {
+              const isLastAssistant = m.role === 'assistant' && i === chatMessages.length - 1;
+              const stillWaitingForFirstChunk = isLastAssistant && chatBusy && m.content === '';
+              if (stillWaitingForFirstChunk) return null; // covered by the "Thinking…" bubble below
+              return (
+                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className={`rounded-lg px-3 py-2 text-sm ${
+                      m.role === 'user'
+                        ? 'max-w-[85%] whitespace-pre-wrap bg-[var(--primary)] text-[var(--primary-foreground)]'
+                        : 'max-w-[95%] min-w-0 bg-[var(--muted)]'
+                    }`}
+                  >
+                    {m.role === 'assistant' ? (
+                      <div className="chat-markdown">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{ table: ({ children }) => <div className="table-wrap"><table>{children}</table></div> }}
+                        >
+                          {m.content}
+                        </ReactMarkdown>
                       </div>
-                    </div>
-                  );
-                })}
-                {chatBusy && chatMessages[chatMessages.length - 1]?.content === '' && (
-                  <div className="flex justify-start">
-                    <div className="flex items-center gap-2 rounded-lg bg-[var(--muted)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Thinking…
-                    </div>
+                    ) : (
+                      m.content
+                    )}
                   </div>
-                )}
-                <div ref={chatEndRef} />
+                </div>
+              );
+            })}
+            {chatBusy && chatMessages[chatMessages.length - 1]?.content === '' && (
+              <div className="flex justify-start">
+                <div className="flex items-center gap-2 rounded-lg bg-[var(--muted)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Thinking…
+                </div>
               </div>
-              <form onSubmit={submitChat} className="flex items-center gap-2 border-t border-[var(--border)] p-3">
-                <input
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  placeholder={`Ask about ${SOURCES.find((s) => s.value === chatSource)?.label}…`}
-                  className="h-10 flex-1 rounded-md border border-[var(--input)] bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--ring)]"
-                />
-                <button
-                  type="submit"
-                  disabled={chatBusy || !chatInput.trim()}
-                  className="flex h-10 w-10 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50"
-                >
-                  <Send className="h-4 w-4" />
-                </button>
-              </form>
-            </section>
-          </>
-        )}
-      </main>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+          <form onSubmit={submitChat} className="flex items-center gap-2 border-t border-[var(--border)] p-3">
+            <input
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder={`Ask about ${SOURCES.find((s) => s.value === chatSource)?.label}…`}
+              className="h-10 flex-1 rounded-md border border-[var(--input)] bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--ring)]"
+            />
+            <button
+              type="submit"
+              disabled={chatBusy || !chatInput.trim()}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </form>
+        </section>
+      )}
     </div>
   );
 }
@@ -446,33 +496,35 @@ function SectionHeading({ title }: { title: string }) {
   );
 }
 
-function OverviewCard({
+function SidebarLink({
+  icon,
   label,
-  onClick,
   active,
-  delayed,
-  urgent,
-  urgentLabel = 'urgent',
+  onClick,
+  stat,
 }: {
+  icon: React.ReactNode;
   label: string;
+  active: boolean;
   onClick: () => void;
-  active?: number;
-  delayed?: number;
-  urgent?: number;
-  urgentLabel?: string;
+  stat?: string;
 }) {
   return (
     <button
       onClick={onClick}
-      className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-left transition-shadow hover:shadow-md"
+      className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
+        active ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'text-[var(--foreground)] hover:bg-[var(--accent)]'
+      }`}
     >
-      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{label}</p>
-      <p className="mt-1 text-2xl font-semibold">{active ?? '—'}</p>
-      <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-        {delayed !== undefined && <span className="text-amber-600">{delayed} delayed</span>}
-        {delayed !== undefined && urgent !== undefined && ' · '}
-        {urgent !== undefined && <span className="text-red-600">{urgent} {urgentLabel}</span>}
-      </p>
+      <span className="shrink-0">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium">{label}</span>
+        {stat && (
+          <span className={`block truncate text-xs ${active ? 'text-[var(--primary-foreground)]/80' : 'text-[var(--muted-foreground)]'}`}>
+            {stat}
+          </span>
+        )}
+      </span>
     </button>
   );
 }
