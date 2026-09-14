@@ -7,13 +7,15 @@ Guidance for Claude Code / any agent working in this repo.
 A **read-only AI monitoring/Q&A layer**, originally built on top of
 Order-to-Delivery (O2D) — the separate, already-in-production system at
 `C:\Users\ACER\Desktop\Order to delivery\at-order-to-dispatch-backend` +
-`at-order-to-dispatch-frontend` — and, added 2026-09-13, ALSO on top of
-Jewel Factory's own production database (`C:\Users\ACER\Desktop\Jewel-
-Factory`). One dashboard, one login, ONE UI — a small source toggle at the
-top ("Order to Delivery" / "Jewel Factory") switches which business's data
-the identical-looking dashboard/chat is reading, never both at once. Each
-source reads a genuinely different Postgres database with its own minimal
-schema subset and its own tool functions (see "Two data sources" below).
+`at-order-to-dispatch-frontend` — extended 2026-09-13 with Jewel Factory's
+own production database (`C:\Users\ACER\Desktop\Jewel-Factory`), and
+2026-09-14 with the ERP module (`C:\Users\ACER\Desktop\erp-new-frontend`'s
+backend, which is mounted on the SAME at-order-to-dispatch-backend as O2D
+— see "Three data sources" below for the important distinction between
+"separate database" and "separate tables, same database"). One dashboard,
+one login, ONE UI — a small source toggle at the top ("Order to Delivery"
+/ "Jewel Factory" / "ERP") switches which data the identical-looking
+dashboard/chat is reading, never more than one at once.
 
 For whichever source is active, this gives a production incharge /
 manufacturer two things:
@@ -50,7 +52,7 @@ default) + `jsonwebtoken` (verifies O2D's own tokens, issues none of its
 own). No separate ORM/API framework, no state-management library — this is
 a small, single-page app (one dashboard+chat page, one login page).
 
-## Two data sources — O2D and Jewel Factory, never mixed
+## Three data sources — O2D, Jewel Factory, and ERP, never mixed
 
 - **O2D** (`source: 'o2d'`, the default/original): `prisma/schema.prisma` +
   `lib/prisma.ts` (`prisma` client) + `lib/tools.ts` + O2D's own login.
@@ -59,18 +61,42 @@ a small, single-page app (one dashboard+chat page, one login page).
   output path `node_modules/.prisma/client-jf` so it never collides with
   the O2D client) + `lib/prisma-jf.ts` (`prismaJf` client, its own
   `DATABASE_URL_JEWEL_FACTORY` connection) + `lib/tools-jf.ts`.
+- **ERP** (`source: 'erp'`, added 2026-09-14): **NOT a separate database**
+  — ERP (whose frontend lives at `C:\Users\ACER\Desktop\erp-new-frontend`)
+  is mounted on the SAME `at-order-to-dispatch-backend` as O2D, at its own
+  `/api/erp/v1` route prefix, sharing the same Postgres database, same
+  `User`/JWT login. So ERP's models (`ProductionPlan`,
+  `ProductionPlanningEntry`, `DepartmentIssueEntry`,
+  `DepartmentReceiptEntry`, `KarigarIssueEntry`, `KarigarReceiptEntry`)
+  were added directly into the EXISTING `prisma/schema.prisma`/`lib/
+  prisma.ts` (`prisma` client) — NOT a new schema file or Prisma client
+  like Jewel Factory got, since there is no second connection to make.
+  `lib/tools-erp.ts` uses that same `prisma` client, just against these
+  different tables.
 
-Both `lib/tools.ts` and `lib/tools-jf.ts` export the same five function
-names (`getSummary`, `getDelayedOrders`, `getStageBottlenecks`,
-`getKarigarLoad`, `getOrderByNumber`, `searchOrders`) with source-specific
-suffixed exports on the JF side (`getSummaryJf`, etc.) — `lib/openai.ts`'s
+All three of `lib/tools.ts`, `lib/tools-jf.ts`, and `lib/tools-erp.ts`
+export the same five function names (`getSummary`, `getDelayedOrders`,
+`getStageBottlenecks`, `getKarigarLoad`, `getOrderByNumber`,
+`searchOrders`) with source-specific suffixed exports on the JF/ERP sides
+(`getSummaryJf`/`getSummaryErp`, etc.) — `lib/openai.ts`'s
 `getToolSchemas(source)`/`getSystemPrompt(source)`/`runTool(name, args,
 user, source)` dispatch to the right file based on `source`, and
 `app/api/insights/route.ts` (`?source=` query param) /
 `app/api/chat/route.ts` (`source` in the request body) thread it through
-from the frontend's tab selection. **Never let a chat request reach the
-other source's tools/database** — this is the whole reason `source` is
+from the frontend's tab selection. **Never let a chat request reach
+another source's tools/database** — this is the whole reason `source` is
 threaded explicitly through every layer instead of inferred.
+
+**ERP tracks metal/production flow, not customer orders** — there's no
+single "order" row per unit of work the way O2D has. `lib/tools-erp.ts`
+re-interprets the three fixed insights around `KarigarIssueEntry`
+(metal issued to a karigar) vs `KarigarReceiptEntry` (metal returned): an
+issue with no receipt yet is "outstanding" (ERP's analogue of an active
+order); "delayed"/"urgent" are AGE-BASED PROXIES (outstanding >7/>14 days)
+since ERP has no real due-date or urgent flag on an issue — both
+`lib/openai.ts`'s ERP system prompt and the ERP dashboard's narrative
+prompt explicitly say so, to avoid the model implying a real deadline was
+missed when none exists in the data.
 
 **Jewel Factory has three order tables** (`B2bOrder` = "Catalogue order",
 `KioskOrder` = "Store Customer order", `CustomDesignOrder` = "Customised
@@ -91,12 +117,18 @@ active/delayed query excludes `o2dOrderId: null`-mismatched rows (only
 counts ones still `null`) specifically to avoid double-counting the same
 underlying piece of work against both tabs.
 
-**Adding a THIRD source later**: follow this same pattern — a new
-`prisma/<name>/schema.prisma` with its own `output`, a new `lib/prisma-
-<name>.ts`, a new `lib/tools-<name>.ts`, extend `Source` in `lib/openai.ts`
-and the `SOURCES` array in `app/page.tsx`. Don't try to make one generic
+**Adding a FOURTH source later**: first figure out which pattern applies —
+if it's a genuinely separate database, follow the Jewel Factory pattern (a
+new `prisma/<name>/schema.prisma` with its own `output`, a new `lib/prisma-
+<name>.ts`, its own `DATABASE_URL_<NAME>`); if it shares an existing
+database (like ERP shares O2D's), just add its models to that database's
+existing schema.prisma and use the existing Prisma client. Either way, add
+a new `lib/tools-<name>.ts`, extend `Source` in `lib/openai.ts` (tool
+schemas + system prompt + `runTool` dispatch) and the `SOURCES` array in
+`app/page.tsx` (+ its own `normalize*` cases if its field names differ from
+the others, see the top of that file). Don't try to make one generic
 "tools" file that branches internally on source — the whole point of the
-per-source-file split is that each business's actual schema/field-names
+per-source-file split is that each source's actual schema/field-names
 genuinely differ, and mixing them inline invites exactly the kind of
 data-shape confusion this split is meant to prevent.
 

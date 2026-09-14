@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
   if (!body?.messages?.length) {
     return NextResponse.json({ success: false, message: 'messages is required' }, { status: 400 });
   }
-  const source: Source = body.source === 'jf' ? 'jf' : 'o2d';
+  const source: Source = body.source === 'jf' ? 'jf' : body.source === 'erp' ? 'erp' : 'o2d';
   const toolSchemas = getToolSchemas(source);
 
   // Keep only the last 10 turns as context — this is a stateless Q&A

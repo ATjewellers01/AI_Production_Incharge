@@ -54,7 +54,7 @@ async function authedFetch(path: string, init?: RequestInit) {
   return json;
 }
 
-export type Source = 'o2d' | 'jf';
+export type Source = 'o2d' | 'jf' | 'erp';
 
 export async function fetchInsights(source: Source = 'o2d') {
   const json = await authedFetch(`/api/insights?source=${source}`);

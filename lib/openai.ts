@@ -3,6 +3,7 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 
 import * as tools from './tools';
 import * as toolsJf from './tools-jf';
+import * as toolsErp from './tools-erp';
 import type { AuthUser } from './auth';
 
 // Lazy singleton — NOT constructed at module load. The OpenAI SDK throws
@@ -21,11 +22,11 @@ export function getOpenAI(): OpenAI {
 export const CHAT_MODEL = process.env.AI_INCHARGE_MODEL || 'gpt-4o';
 
 /** Which business's data this dashboard/chat is currently scoped to. Added
- * 2026-09-13 when Jewel Factory was added alongside the original O2D
- * integration — every tool schema, system prompt, and dispatch table below
- * is now keyed by this so a chat session can NEVER mix the two businesses'
- * data in one answer, and the LLM can never see a tool it isn't scoped to. */
-export type Source = 'o2d' | 'jf';
+ * 2026-09-13 (Jewel Factory) and extended 2026-09-14 (ERP) — every tool
+ * schema, system prompt, and dispatch table below is now keyed by this so
+ * a chat session can NEVER mix sources' data in one answer, and the LLM
+ * can never see a tool it isn't scoped to. */
+export type Source = 'o2d' | 'jf' | 'erp';
 
 // ── Tool schemas handed to the LLM (OpenAI function-calling), per source ────
 // Every one of these maps 1:1 to a function in lib/tools.ts (O2D) or
@@ -184,8 +185,84 @@ const TOOL_SCHEMAS_JF: ChatCompletionTool[] = [
   },
 ];
 
+const TOOL_SCHEMAS_ERP: ChatCompletionTool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'getDelayedOrders',
+      description:
+        'List every karigar metal issue that has not yet been received back (no receipt recorded against it), oldest first. Use for any "what is outstanding / overdue / delayed" question.',
+      parameters: {
+        type: 'object',
+        properties: { limit: { type: 'number', description: 'Max rows to return, default 100' } },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getStageBottlenecks',
+      description:
+        'How many production-planning entries currently sit in each status (pending/issued/received-equivalent), and how old the single oldest one in each is. Use for "where is the bottleneck" questions.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getKarigarLoad',
+      description:
+        'How much metal weight (and how many outstanding issues) each karigar currently has not yet returned. Optionally narrow to one karigar by partial, case-insensitive name.',
+      parameters: {
+        type: 'object',
+        properties: { karigarName: { type: 'string', description: 'Optional partial karigar name to filter to just one karigar' } },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getOrderByNumber',
+      description: 'Look up one specific karigar metal issue by its exact issue number.',
+      parameters: {
+        type: 'object',
+        properties: { orderNo: { type: 'string', description: 'The exact issueNo' } },
+        required: ['orderNo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'searchOrders',
+      description:
+        'General-purpose karigar-issue search with optional filters (karigar name, order number, melting/purity type, only-outstanding). Use for any question that does not cleanly fit the other tools. Returns at most 50 rows.',
+      parameters: {
+        type: 'object',
+        properties: {
+          karigarName: { type: 'string' },
+          orderNo: { type: 'string' },
+          meltingType: { type: 'string' },
+          onlyOutstanding: { type: 'boolean', description: 'true to only include issues not yet received back' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getSummary',
+      description:
+        'Quick top-line counts: total outstanding issues, total delayed (outstanding >7 days), total long-outstanding (>14 days, the closest available proxy for "urgent" — ERP has no separate urgent flag), total karigar receipts recorded today.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+];
+
 export function getToolSchemas(source: Source): ChatCompletionTool[] {
-  return source === 'jf' ? TOOL_SCHEMAS_JF : TOOL_SCHEMAS_O2D;
+  if (source === 'jf') return TOOL_SCHEMAS_JF;
+  if (source === 'erp') return TOOL_SCHEMAS_ERP;
+  return TOOL_SCHEMAS_O2D;
 }
 
 const SYSTEM_PROMPT_BASE = `Your job is READ-ONLY analysis and reporting. You can see order status, delays, stage
@@ -235,14 +312,33 @@ system and suggest checking there.
 
 ${SYSTEM_PROMPT_BASE}`;
 
+const SYSTEM_PROMPT_ERP = `You are the AI Production Incharge for the ERP (metal/production-flow tracking) side of this
+jewellery manufacturing system.
+
+This ERP module tracks METAL and PRODUCTION FLOW, not customer orders — there is no
+single "order" row per unit of work the way the Order-to-Delivery system has. What you
+actually see: karigar metal issues (metal handed to an artisan) and their receipts
+(metal returned), and production-planning entries showing which department/stage work
+currently sits in.
+
+Important: this ERP data has NO real "urgent" flag and no real due-date field on a
+karigar issue — when you report "delayed" or "urgent" here, always make clear these are
+based on how long metal has been outstanding (over 7 days = delayed, over 14 days = the
+closest available proxy for urgent), not an actual due-date or priority marking set by
+anyone. Never imply a real due date or urgent flag exists in this data.
+
+${SYSTEM_PROMPT_BASE}`;
+
 export function getSystemPrompt(source: Source): string {
-  return source === 'jf' ? SYSTEM_PROMPT_JF : SYSTEM_PROMPT_O2D;
+  if (source === 'jf') return SYSTEM_PROMPT_JF;
+  if (source === 'erp') return SYSTEM_PROMPT_ERP;
+  return SYSTEM_PROMPT_O2D;
 }
 
-/** Dispatches one tool call by name to the matching lib/tools.ts (O2D) or
- * lib/tools-jf.ts (Jewel Factory) function, scoped strictly to `source` —
- * a chat session can never reach the other business's tools even if the
- * model somehow requested a mismatched name. */
+/** Dispatches one tool call by name to the matching lib/tools.ts (O2D),
+ * lib/tools-jf.ts (Jewel Factory), or lib/tools-erp.ts (ERP) function,
+ * scoped strictly to `source` — a chat session can never reach another
+ * source's tools even if the model somehow requested a mismatched name. */
 export async function runTool(name: string, args: Record<string, unknown>, user: AuthUser, source: Source): Promise<unknown> {
   if (source === 'jf') {
     switch (name) {
@@ -258,6 +354,25 @@ export async function runTool(name: string, args: Record<string, unknown>, user:
         return toolsJf.searchOrdersJf(user, args as toolsJf.SearchFiltersJf);
       case 'getSummary':
         return toolsJf.getSummaryJf(user);
+      default:
+        return { error: `Unknown tool: ${name}` };
+    }
+  }
+
+  if (source === 'erp') {
+    switch (name) {
+      case 'getDelayedOrders':
+        return toolsErp.getDelayedIssuesErp(user, args.limit as number | undefined);
+      case 'getStageBottlenecks':
+        return toolsErp.getStageBottlenecksErp(user);
+      case 'getKarigarLoad':
+        return toolsErp.getKarigarLoadErp(user, args.karigarName as string | undefined);
+      case 'getOrderByNumber':
+        return toolsErp.getIssueByNumberErp(user, args.orderNo as string);
+      case 'searchOrders':
+        return toolsErp.searchIssuesErp(user, args as toolsErp.SearchFiltersErp);
+      case 'getSummary':
+        return toolsErp.getSummaryErp(user);
       default:
         return { error: `Unknown tool: ${name}` };
     }

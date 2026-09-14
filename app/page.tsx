@@ -9,32 +9,43 @@ import remarkGfm from 'remark-gfm';
 import { clearToken, fetchInsights, getToken, sendChatStream, type Source } from '@/lib/client-api';
 import type { DelayedOrder, KarigarLoad, StageBottleneck, Summary } from '@/lib/tools';
 import type { DelayedOrderJf, KarigarLoadJf, StageBottleneckJf, SummaryJf } from '@/lib/tools-jf';
+import type { DelayedIssueErp, KarigarLoadErp, StageBottleneckErp, SummaryErp } from '@/lib/tools-erp';
 
 // The dashboard renders identically regardless of source — only the data
-// underneath changes. O2D's and Jewel Factory's tools return slightly
-// different field names (companyName vs storeName, karigarName+karigarCode
-// vs karigarCode-only) because they come from genuinely different
-// databases/schemas, so each source's raw rows are normalized into this one
-// shared display shape right after fetching, rather than duplicating the
-// whole card/list JSX per source.
+// underneath changes. O2D's, Jewel Factory's, and ERP's tools each return
+// slightly different field names (companyName vs storeName vs orderNo-
+// only, karigarName+karigarCode vs karigarCode-only vs karigarName-only)
+// because they come from genuinely different databases/schemas, so each
+// source's raw rows are normalized into this one shared display shape
+// right after fetching, rather than duplicating the whole card/list JSX
+// per source.
 type DisplayOrder = { orderNo: string; primaryLabel: string; subLabel: string; daysLate: number };
 type DisplayKarigar = { key: string; label: string; activeOrderCount: number; delayedOrderCount: number };
+type DisplayBottleneck = { key: string; stage: string; count: number; oldestRef: string | null; oldestAgeDays: number | null };
 
 type InsightsData = {
-  summary: Summary | SummaryJf;
+  summary: Summary | SummaryJf | SummaryErp;
   delayedOrders: DisplayOrder[];
-  stageBottlenecks: StageBottleneck[] | StageBottleneckJf[];
+  stageBottlenecks: DisplayBottleneck[];
   karigarLoad: DisplayKarigar[];
   narrative: string | null;
 };
 
-function normalizeDelayedOrders(source: Source, rows: DelayedOrder[] | DelayedOrderJf[]): DisplayOrder[] {
+function normalizeDelayedOrders(source: Source, rows: DelayedOrder[] | DelayedOrderJf[] | DelayedIssueErp[]): DisplayOrder[] {
   if (source === 'jf') {
     return (rows as DelayedOrderJf[]).map((o) => ({
       orderNo: o.orderNo,
       primaryLabel: `${o.orderNo} · ${o.storeName}`,
       subLabel: `${o.kind} · ${o.stage}${o.karigarCode ? ` · ${o.karigarCode}` : ''}`,
       daysLate: o.daysLate,
+    }));
+  }
+  if (source === 'erp') {
+    return (rows as DelayedIssueErp[]).map((i) => ({
+      orderNo: i.issueNo,
+      primaryLabel: `${i.issueNo} · ${i.orderNo}`,
+      subLabel: `${i.karigarName} · ${i.totalWeight}g outstanding`,
+      daysLate: i.daysOutstanding,
     }));
   }
   return (rows as DelayedOrder[]).map((o) => ({
@@ -45,13 +56,40 @@ function normalizeDelayedOrders(source: Source, rows: DelayedOrder[] | DelayedOr
   }));
 }
 
-function normalizeKarigarLoad(source: Source, rows: KarigarLoad[] | KarigarLoadJf[]): DisplayKarigar[] {
+function normalizeStageBottlenecks(source: Source, rows: StageBottleneck[] | StageBottleneckJf[] | StageBottleneckErp[]): DisplayBottleneck[] {
+  if (source === 'erp') {
+    return (rows as StageBottleneckErp[]).map((s) => ({
+      key: s.stage,
+      stage: s.stage,
+      count: s.entryCount,
+      oldestRef: s.oldestRef,
+      oldestAgeDays: s.oldestAgeDays,
+    }));
+  }
+  return (rows as (StageBottleneck | StageBottleneckJf)[]).map((s) => ({
+    key: s.stage,
+    stage: s.stage,
+    count: s.orderCount,
+    oldestRef: s.oldestOrderNo,
+    oldestAgeDays: s.oldestOrderAgeDays,
+  }));
+}
+
+function normalizeKarigarLoad(source: Source, rows: KarigarLoad[] | KarigarLoadJf[] | KarigarLoadErp[]): DisplayKarigar[] {
   if (source === 'jf') {
     return (rows as KarigarLoadJf[]).map((k) => ({
       key: k.karigarCode,
       label: k.karigarCode,
       activeOrderCount: k.activeOrderCount,
       delayedOrderCount: k.delayedOrderCount,
+    }));
+  }
+  if (source === 'erp') {
+    return (rows as KarigarLoadErp[]).map((k) => ({
+      key: k.karigarName,
+      label: `${k.karigarName} (${k.outstandingWeight}g)`,
+      activeOrderCount: k.outstandingIssueCount,
+      delayedOrderCount: 0, // ERP's "delayed" is an age-based summary stat, not tracked per-karigar here
     }));
   }
   return (rows as KarigarLoad[]).map((k) => ({
@@ -67,6 +105,7 @@ type ChatMsg = { role: 'user' | 'assistant'; content: string };
 const SOURCES: { value: Source; label: string }[] = [
   { value: 'o2d', label: 'Order to Delivery' },
   { value: 'jf', label: 'Jewel Factory' },
+  { value: 'erp', label: 'ERP' },
 ];
 
 export default function DashboardPage() {
@@ -88,6 +127,7 @@ export default function DashboardPage() {
       setData({
         ...insights,
         delayedOrders: normalizeDelayedOrders(activeSource, insights.delayedOrders),
+        stageBottlenecks: normalizeStageBottlenecks(activeSource, insights.stageBottlenecks),
         karigarLoad: normalizeKarigarLoad(activeSource, insights.karigarLoad),
       });
     } catch (e) {
@@ -272,12 +312,12 @@ export default function DashboardPage() {
                 <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><AlertTriangle className="h-4 w-4 text-orange-600" /> Stage bottlenecks</h2>
                 <div className="max-h-80 space-y-1.5 overflow-y-auto">
                   {data.stageBottlenecks.map((s) => (
-                    <div key={s.stage} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
+                    <div key={s.key} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
                       <div className="min-w-0">
                         <p className="truncate font-medium">{s.stage}</p>
-                        {s.oldestOrderNo && <p className="truncate text-[var(--muted-foreground)]">Oldest: {s.oldestOrderNo} ({s.oldestOrderAgeDays}d)</p>}
+                        {s.oldestRef && <p className="truncate text-[var(--muted-foreground)]">Oldest: {s.oldestRef} ({s.oldestAgeDays}d)</p>}
                       </div>
-                      <span className="shrink-0 rounded-full bg-[var(--secondary)] px-2 py-0.5 font-semibold">{s.orderCount}</span>
+                      <span className="shrink-0 rounded-full bg-[var(--secondary)] px-2 py-0.5 font-semibold">{s.count}</span>
                     </div>
                   ))}
                 </div>
@@ -307,7 +347,9 @@ export default function DashboardPage() {
                 <p className="text-xs text-[var(--muted-foreground)]">
                   {source === 'jf'
                     ? 'e.g. "Which retailer\'s order is late?" · "How much work does karigar A54 have?"'
-                    : 'e.g. "Which urgent orders are late?" · "How much work does Ramesh have?"'}
+                    : source === 'erp'
+                      ? 'e.g. "Which metal issues are outstanding the longest?" · "How much metal does karigar Ramesh have?"'
+                      : 'e.g. "Which urgent orders are late?" · "How much work does Ramesh have?"'}
                 </p>
               </div>
               <div className="flex-1 space-y-3 overflow-y-auto p-4">

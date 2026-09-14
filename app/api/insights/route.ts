@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser, AuthError } from '@/lib/auth';
 import { getDelayedOrders, getStageBottlenecks, getKarigarLoad, getSummary } from '@/lib/tools';
 import { getDelayedOrdersJf, getStageBottlenecksJf, getKarigarLoadJf, getSummaryJf } from '@/lib/tools-jf';
+import { getDelayedIssuesErp, getStageBottlenecksErp, getKarigarLoadErp, getSummaryErp } from '@/lib/tools-erp';
 import { getOpenAI, CHAT_MODEL, type Source } from '@/lib/openai';
 
 /**
@@ -13,10 +14,10 @@ import { getOpenAI, CHAT_MODEL, type Source } from '@/lib/openai';
  * insights here are pre-decided and always shown, so they're called
  * directly rather than left to the model to choose.
  *
- * ?source=o2d (default) or ?source=jf selects which business's data comes
- * back — added 2026-09-13 alongside Jewel Factory. The dashboard's own
- * source toggle passes this; the response shape is identical either way so
- * the frontend cards render the same regardless of which is active.
+ * ?source=o2d (default), ?source=jf, or ?source=erp selects which data
+ * comes back — jf added 2026-09-13, erp added 2026-09-14. The dashboard's
+ * own source toggle passes this; the response shape is identical either
+ * way so the frontend cards render the same regardless of which is active.
  */
 export async function GET(req: NextRequest) {
   let user;
@@ -27,14 +28,33 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, message: err.message }, { status: err.status ?? 401 });
   }
 
-  const source: Source = req.nextUrl.searchParams.get('source') === 'jf' ? 'jf' : 'o2d';
+  const sourceParam = req.nextUrl.searchParams.get('source');
+  const source: Source = sourceParam === 'jf' ? 'jf' : sourceParam === 'erp' ? 'erp' : 'o2d';
 
   let summary, delayedOrders, stageBottlenecks, karigarLoad;
   try {
-    [summary, delayedOrders, stageBottlenecks, karigarLoad] =
-      source === 'jf'
-        ? await Promise.all([getSummaryJf(user), getDelayedOrdersJf(user), getStageBottlenecksJf(user), getKarigarLoadJf(user)])
-        : await Promise.all([getSummary(user), getDelayedOrders(user), getStageBottlenecks(user), getKarigarLoad(user)]);
+    if (source === 'jf') {
+      [summary, delayedOrders, stageBottlenecks, karigarLoad] = await Promise.all([
+        getSummaryJf(user),
+        getDelayedOrdersJf(user),
+        getStageBottlenecksJf(user),
+        getKarigarLoadJf(user),
+      ]);
+    } else if (source === 'erp') {
+      [summary, delayedOrders, stageBottlenecks, karigarLoad] = await Promise.all([
+        getSummaryErp(user),
+        getDelayedIssuesErp(user),
+        getStageBottlenecksErp(user),
+        getKarigarLoadErp(user),
+      ]);
+    } else {
+      [summary, delayedOrders, stageBottlenecks, karigarLoad] = await Promise.all([
+        getSummary(user),
+        getDelayedOrders(user),
+        getStageBottlenecks(user),
+        getKarigarLoad(user),
+      ]);
+    }
   } catch (e) {
     // A database-connection failure (bad DATABASE_URL, SSL mismatch,
     // unreachable host, etc.) previously crashed this whole route with no
@@ -56,16 +76,17 @@ export async function GET(req: NextRequest) {
   let narrative: string | null = null;
   if (process.env.OPENAI_API_KEY) {
     try {
+      const narrativeSystemPrompt =
+        source === 'jf'
+          ? 'You are a production-floor analyst for a jewellery manufacturer (Jewel Factory). Given raw JSON data (delayed orders across Catalogue/Store Customer/Customised orders, stage bottlenecks, karigar workload), write a short (4-6 sentence) plain-language briefing a manufacturer would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.'
+          : source === 'erp'
+            ? 'You are a production-floor analyst for a jewellery manufacturing ERP (metal/production-flow tracking, not customer orders). Given raw JSON data (outstanding karigar metal issues, production-planning stage counts, karigar workload by outstanding weight), write a short (4-6 sentence) plain-language briefing. This data has no real due-date or urgent flag — "delayed"/"urgent" are proxies based on how long metal has been outstanding, make that clear rather than implying a real deadline was missed. No price/monetary language. Do not invent any number not present in the data.'
+            : 'You are a production-floor analyst for a jewellery order-to-delivery system. Given raw JSON data (delayed orders, stage bottlenecks, karigar workload), write a short (4-6 sentence) plain-language briefing a production incharge would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.';
+
       const completion = await getOpenAI().chat.completions.create({
         model: CHAT_MODEL,
         messages: [
-          {
-            role: 'system',
-            content:
-              source === 'jf'
-                ? 'You are a production-floor analyst for a jewellery manufacturer (Jewel Factory). Given raw JSON data (delayed orders across Catalogue/Store Customer/Customised orders, stage bottlenecks, karigar workload), write a short (4-6 sentence) plain-language briefing a manufacturer would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.'
-                : 'You are a production-floor analyst for a jewellery order-to-delivery system. Given raw JSON data (delayed orders, stage bottlenecks, karigar workload), write a short (4-6 sentence) plain-language briefing a production incharge would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.',
-          },
+          { role: 'system', content: narrativeSystemPrompt },
           {
             role: 'user',
             content: JSON.stringify({ summary, delayedOrders: delayedOrders.slice(0, 20), stageBottlenecks, karigarLoad: karigarLoad.slice(0, 20) }),

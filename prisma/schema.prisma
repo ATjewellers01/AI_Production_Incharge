@@ -2,9 +2,9 @@
 // at-order-to-dispatch-backend. This is a deliberately minimal subset of
 // that project's full schema.prisma: only the models this service actually
 // queries (Order, Karigar, Company, Branch, OrderStage, Category, Melting,
-// DeliveryLocation, User). Every other table in the real database (the
-// merged ERP module — Product, ProductionPlan, KarigarIssueEntry, etc., and
-// this service never queries them) simply isn't declared here — Prisma
+// DeliveryLocation, User, plus a subset of the ERP module added 2026-09-14
+// — see the "ERP models" section below). Every other table in the real
+// database this service never queries simply isn't declared here — Prisma
 // only needs to know about tables THIS client reads.
 //
 // SAFETY: this service has ZERO write paths anywhere in its own code (no
@@ -176,4 +176,126 @@ model Order {
   @@index([createdAt(sort: Desc)])
   @@index([karigarId])
   @@index([branchId])
+}
+
+// ── ERP models (added 2026-09-14) ────────────────────────────────────────
+// Same physical database/tables as everything above (ERP is mounted on the
+// SAME at-order-to-dispatch-backend, at a distinct /api/erp/v1 route
+// prefix, sharing the same User/JWT login) — this is NOT a second
+// connection/Prisma client like Jewel Factory's (that's a genuinely
+// separate database). Copied field-for-field from
+// at-order-to-dispatch-backend/prisma/schema.prisma's own "ERP models
+// ported from AT-erp-new-backend (Drizzle)" section — only the models/
+// fields lib/tools-erp.ts actually reads. If a query needs a field/model
+// not listed below, copy it verbatim from that project's schema.prisma,
+// same rule as the rest of this file.
+//
+// The three fixed insights map onto ERP concepts as: "delayed orders" →
+// KarigarIssueEntry rows with no matching KarigarReceiptEntry yet (metal
+// issued to a karigar, not yet returned); "stage bottlenecks" →
+// ProductionPlanningEntry.status / DepartmentIssueEntry.plannedStatus
+// counts; "karigar load" → KarigarIssueEntry.karigarName groupings — see
+// lib/tools-erp.ts for the exact logic.
+
+model ProductionPlan {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  timestamp   DateTime @default(now()) @db.Timestamptz(6)
+  serialNo    String   @unique @map("serial_no")
+  meltingType String   @map("melting_type")
+  planType    String   @default("ORDER") @map("plan_type")
+  customer    String?  @default("")
+  totalWeight Decimal  @map("total_weight") @db.Decimal(12, 3)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  entries ProductionPlanningEntry[]
+
+  @@map("production_plans")
+}
+
+model ProductionPlanningEntry {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  timestamp       DateTime       @default(now()) @db.Timestamptz(6)
+  planId          String         @map("plan_id") @db.Uuid
+  plan            ProductionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  dept            String
+  karigarName     String?        @default("") @map("karigar_name")
+  plannedWeight   Decimal        @map("planned_weight") @db.Decimal(12, 3)
+  issueWeight     Decimal        @default(0.000) @map("issue_weight") @db.Decimal(12, 3)
+  remainingWeight Decimal        @map("remaining_weight") @db.Decimal(12, 3)
+  status          String         @default("pending")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  departmentIssues DepartmentIssueEntry[]
+
+  @@index([planId])
+  @@map("production_planning_entries")
+}
+
+model DepartmentIssueEntry {
+  id              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  timestamp       DateTime                @default(now()) @db.Timestamptz(6)
+  issueNo         String                  @unique @map("issue_no")
+  planningEntryId String                  @map("planning_entry_id") @db.Uuid
+  planningEntry   ProductionPlanningEntry @relation(fields: [planningEntryId], references: [id], onDelete: Restrict)
+  orderNo         String                  @map("order_no")
+  issueWeight     Decimal                 @map("issue_weight") @db.Decimal(12, 3)
+  karigarName     String                  @map("karigar_name")
+  plannedStatus   String                  @default("pending") @map("planned_status")
+  dept            String?
+  createdAt       DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  receipts DepartmentReceiptEntry[]
+
+  @@index([planningEntryId])
+  @@map("department_issue_entries")
+}
+
+model DepartmentReceiptEntry {
+  id          String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  issueNo     String               @map("issue_no")
+  issue       DepartmentIssueEntry @relation(fields: [issueNo], references: [issueNo], onDelete: Cascade)
+  receiptNo   String               @unique @map("receipt_no")
+  dept        String?
+  finishedNet Decimal              @default(0) @map("finished_net") @db.Decimal(12, 3)
+  returnType  String               @map("return_type")
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("department_receipt_entries")
+}
+
+// id kept as native uuid — same reason at-order-to-dispatch-backend's own
+// schema documents (a raw INSERT elsewhere targets this exact id shape);
+// irrelevant to this read-only client but kept for physical-column parity.
+model KarigarIssueEntry {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  timestamp        DateTime @default(now()) @db.Timestamptz(6)
+  issueNo          String   @unique @map("issue_no")
+  orderNo          String   @map("order_no")
+  totalWeight      Decimal  @map("total_weight") @db.Decimal(12, 3)
+  issueStatus      String   @default("Partial") @map("issue_status")
+  meltingType      String   @map("melting_type")
+  karigarName      String   @map("karigar_name")
+  expectedDelivery String?  @default("") @map("expected_delivery")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  receipts KarigarReceiptEntry[]
+
+  @@map("karigar_issue_entries")
+}
+
+model KarigarReceiptEntry {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  issueNo       String            @map("issue_no")
+  issue         KarigarIssueEntry @relation(fields: [issueNo], references: [issueNo], onDelete: Cascade)
+  voucherNumber String            @unique @map("voucher_number")
+  totalWeight   Decimal           @default(0) @map("total_weight") @db.Decimal(12, 3)
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("karigar_receipt_entries")
 }
