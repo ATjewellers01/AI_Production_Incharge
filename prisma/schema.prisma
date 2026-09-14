@@ -178,7 +178,8 @@ model Order {
   @@index([branchId])
 }
 
-// ── ERP models (added 2026-09-14) ────────────────────────────────────────
+// ── ERP models (added 2026-09-14, extended same day for the real ERP
+// dashboard's own metrics) ───────────────────────────────────────────────
 // Same physical database/tables as everything above (ERP is mounted on the
 // SAME at-order-to-dispatch-backend, at a distinct /api/erp/v1 route
 // prefix, sharing the same User/JWT login) — this is NOT a second
@@ -190,12 +191,19 @@ model Order {
 // not listed below, copy it verbatim from that project's schema.prisma,
 // same rule as the rest of this file.
 //
-// The three fixed insights map onto ERP concepts as: "delayed orders" →
-// KarigarIssueEntry rows with no matching KarigarReceiptEntry yet (metal
-// issued to a karigar, not yet returned); "stage bottlenecks" →
-// ProductionPlanningEntry.status / DepartmentIssueEntry.plannedStatus
-// counts; "karigar load" → KarigarIssueEntry.karigarName groupings — see
-// lib/tools-erp.ts for the exact logic.
+// This dashboard's ERP insights deliberately mirror erp-new-frontend's OWN
+// dashboard (src/app/pages/Dashboard.tsx + its dashboard/*.tsx widgets and
+// the backend endpoints in at-order-to-dispatch-backend/src/erp/
+// {dashboard,stockSummary,productionPlanning}.routes.ts) rather than
+// force-fitting the O2D/Jewel-Factory "delayed orders / stage bottlenecks /
+// karigar load" pattern — ERP tracks metal/production FLOW, not customer
+// orders, so its real users look at: metal stock levels (24K/22K/18K +
+// scrap), department recovery % (issued vs returned weight), karigar
+// recovery ranking, alloy conversion loss %, and a queued/in-progress/ready
+// job pipeline. See lib/tools-erp.ts for the exact per-metric logic, kept
+// as close as possible to the real backend's own calculation (raw SQL
+// where the original uses raw SQL, same CompleteReturn-gating rules for
+// scrap/stock credit) rather than a simplified approximation.
 
 model ProductionPlan {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -244,6 +252,8 @@ model DepartmentIssueEntry {
   karigarName     String                  @map("karigar_name")
   plannedStatus   String                  @default("pending") @map("planned_status")
   dept            String?
+  meltingType     String?                 @default("") @map("melting_type")
+  actual2         DateTime?               @db.Timestamptz(6)
   createdAt       DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -260,6 +270,9 @@ model DepartmentReceiptEntry {
   receiptNo   String               @unique @map("receipt_no")
   dept        String?
   finishedNet Decimal              @default(0) @map("finished_net") @db.Decimal(12, 3)
+  scrapMetal  Decimal              @default(0) @map("scrap_metal") @db.Decimal(12, 3)
+  dustWeight  Decimal              @default(0) @map("dust_weight") @db.Decimal(12, 3)
+  metalLoss   Decimal              @default(0) @map("metal_loss") @db.Decimal(12, 3)
   returnType  String               @map("return_type")
   createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -280,6 +293,11 @@ model KarigarIssueEntry {
   meltingType      String   @map("melting_type")
   karigarName      String   @map("karigar_name")
   expectedDelivery String?  @default("") @map("expected_delivery")
+  directMetal      Decimal  @default(0) @map("direct_metal") @db.Decimal(12, 3)
+  die              Decimal  @default(0) @db.Decimal(12, 3)
+  chain            Decimal  @default(0) @db.Decimal(12, 3)
+  taar             Decimal  @default(0) @db.Decimal(12, 3)
+  kdm              Decimal  @default(0) @db.Decimal(12, 3)
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -298,4 +316,39 @@ model KarigarReceiptEntry {
   updatedAt     DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("karigar_receipt_entries")
+}
+
+// Raw 24K metal procurement/intake entries — feeds the stock-summary
+// calculation's 24K (999/995 purity buckets) figures.
+model MetalStockEntry {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  timestamp       DateTime @default(now()) @db.Timestamptz(6)
+  serialNo        String   @unique @map("serial_no")
+  grossWeight     Decimal  @map("gross_weight") @db.Decimal(12, 3)
+  purity          Decimal  @db.Decimal(5, 2)
+  storageLocation String   @map("storage_location")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("metal_stock_entries")
+}
+
+// 24K -> 22K/20K/18K alloy conversion batches — feeds both the alloy-loss
+// summary and the karat-stock calculation (conversion output/input).
+model AlloyConversionEntry {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  timestamp      DateTime @default(now()) @db.Timestamptz(6)
+  serialNo       String   @unique @map("serial_no")
+  targetKarat    String   @map("target_karat")
+  batchNumber    String?  @map("batch_number")
+  input24K       Decimal  @map("input_24k") @db.Decimal(12, 3)
+  purity         Decimal  @db.Decimal(5, 2)
+  storageLocation String? @map("storage_location")
+  expectedOutput Decimal  @map("expected_output") @db.Decimal(12, 3)
+  actualOutput   Decimal  @map("actual_output") @db.Decimal(12, 3)
+  estimatedLoss  Decimal  @map("estimated_loss") @db.Decimal(12, 3)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("alloy_conversion_entries")
 }

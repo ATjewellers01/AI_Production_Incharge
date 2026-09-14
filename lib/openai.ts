@@ -189,71 +189,69 @@ const TOOL_SCHEMAS_ERP: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
-      name: 'getDelayedOrders',
+      name: 'getMetalStockSummary',
       description:
-        'List every karigar metal issue that has not yet been received back (no receipt recorded against it), oldest first. Use for any "what is outstanding / overdue / delayed" question.',
-      parameters: {
-        type: 'object',
-        properties: { limit: { type: 'number', description: 'Max rows to return, default 100' } },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'getStageBottlenecks',
-      description:
-        'How many production-planning entries currently sit in each status (pending/issued/received-equivalent), and how old the single oldest one in each is. Use for "where is the bottleneck" questions.',
+        'Current metal stock levels: 24K/22K/20K/18K gold on hand, scrap/wastage pool balance, and total conversion (metal) loss recorded. Use for any "how much gold do we have / what\'s our stock" question.',
       parameters: { type: 'object', properties: {} },
     },
   },
   {
     type: 'function',
     function: {
-      name: 'getKarigarLoad',
+      name: 'getDepartmentEfficiency',
       description:
-        'How much metal weight (and how many outstanding issues) each karigar currently has not yet returned. Optionally narrow to one karigar by partial, case-insensitive name.',
-      parameters: {
-        type: 'object',
-        properties: { karigarName: { type: 'string', description: 'Optional partial karigar name to filter to just one karigar' } },
-      },
+        'Recovery percentage per department (Die/Taar/Chain/KDM etc.) — issued weight vs. returned weight, across completed department issues. Use for "which department has the most loss / best recovery" questions.',
+      parameters: { type: 'object', properties: {} },
     },
   },
   {
     type: 'function',
     function: {
-      name: 'getOrderByNumber',
-      description: 'Look up one specific karigar metal issue by its exact issue number.',
-      parameters: {
-        type: 'object',
-        properties: { orderNo: { type: 'string', description: 'The exact issueNo' } },
-        required: ['orderNo'],
-      },
+      name: 'getKarigarRankings',
+      description:
+        'Every karigar\'s recovery percentage (issued weight vs. returned weight, completed work only), sorted best-first. Use for "who is the best/worst performing karigar" questions — the caller can take the top N or bottom N from the returned list.',
+      parameters: { type: 'object', properties: {} },
     },
   },
   {
     type: 'function',
     function: {
-      name: 'searchOrders',
-      description:
-        'General-purpose karigar-issue search with optional filters (karigar name, order number, melting/purity type, only-outstanding). Use for any question that does not cleanly fit the other tools. Returns at most 50 rows.',
-      parameters: {
-        type: 'object',
-        properties: {
-          karigarName: { type: 'string' },
-          orderNo: { type: 'string' },
-          meltingType: { type: 'string' },
-          onlyOutstanding: { type: 'boolean', description: 'true to only include issues not yet received back' },
-        },
-      },
+      name: 'getDepartmentSummary',
+      description: 'How many department issues are still pending (not yet returned) and their weight, plus the average recovery % across completed ones.',
+      parameters: { type: 'object', properties: {} },
     },
   },
   {
     type: 'function',
     function: {
-      name: 'getSummary',
+      name: 'getAlloySummary',
       description:
-        'Quick top-line counts: total outstanding issues, total delayed (outstanding >7 days), total long-outstanding (>14 days, the closest available proxy for "urgent" — ERP has no separate urgent flag), total karigar receipts recorded today.',
+        'Alloy conversion (24K -> lower karat) stats: total conversions, average loss %, how many exceeded the 1% loss threshold, how many happened today, and the 3 most recent conversion batches.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getJobPipeline',
+      description:
+        'Production-planning job pipeline: how many jobs are queued (no department issue raised yet), in progress, or ready (received back), plus a per-department breakdown of pending issues/returns and their weight.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getRecentActivity',
+      description: 'The 8 most recent department-issue events (metal deployed to a department/karigar), newest first.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getOrdersSummary',
+      description: 'Factory order counts by type (normal/urgent/stock) and their total weight, from the Order-to-Delivery order table.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -317,15 +315,16 @@ jewellery manufacturing system.
 
 This ERP module tracks METAL and PRODUCTION FLOW, not customer orders — there is no
 single "order" row per unit of work the way the Order-to-Delivery system has. What you
-actually see: karigar metal issues (metal handed to an artisan) and their receipts
-(metal returned), and production-planning entries showing which department/stage work
-currently sits in.
+actually see: current metal stock levels by karat (24K/22K/20K/18K) plus scrap and
+conversion loss, department recovery percentages (issued vs. returned weight),
+karigar recovery rankings, alloy-conversion loss stats, a job pipeline
+(queued/in-progress/ready), and a recent department-issue activity feed.
 
-Important: this ERP data has NO real "urgent" flag and no real due-date field on a
-karigar issue — when you report "delayed" or "urgent" here, always make clear these are
-based on how long metal has been outstanding (over 7 days = delayed, over 14 days = the
-closest available proxy for urgent), not an actual due-date or priority marking set by
-anyone. Never imply a real due date or urgent flag exists in this data.
+"Recovery %" means how much of the metal issued to a department/karigar actually came
+back as finished goods + scrap + dust + accounted loss — higher is better, roughly 98%+
+is considered good performance. This data has no real due-date or "urgent order" flag
+the way Order-to-Delivery has — don't invent one; describe pending department issues by
+their actual pending weight/count instead.
 
 ${SYSTEM_PROMPT_BASE}`;
 
@@ -361,18 +360,22 @@ export async function runTool(name: string, args: Record<string, unknown>, user:
 
   if (source === 'erp') {
     switch (name) {
-      case 'getDelayedOrders':
-        return toolsErp.getDelayedIssuesErp(user, args.limit as number | undefined);
-      case 'getStageBottlenecks':
-        return toolsErp.getStageBottlenecksErp(user);
-      case 'getKarigarLoad':
-        return toolsErp.getKarigarLoadErp(user, args.karigarName as string | undefined);
-      case 'getOrderByNumber':
-        return toolsErp.getIssueByNumberErp(user, args.orderNo as string);
-      case 'searchOrders':
-        return toolsErp.searchIssuesErp(user, args as toolsErp.SearchFiltersErp);
-      case 'getSummary':
-        return toolsErp.getSummaryErp(user);
+      case 'getMetalStockSummary':
+        return toolsErp.getMetalStockSummaryErp(user);
+      case 'getDepartmentEfficiency':
+        return toolsErp.getDepartmentEfficiencyErp(user);
+      case 'getKarigarRankings':
+        return toolsErp.getKarigarRankingsErp(user);
+      case 'getDepartmentSummary':
+        return toolsErp.getDepartmentSummaryErp(user);
+      case 'getAlloySummary':
+        return toolsErp.getAlloySummaryErp(user);
+      case 'getJobPipeline':
+        return toolsErp.getJobPipelineErp(user);
+      case 'getRecentActivity':
+        return toolsErp.getRecentActivityErp(user);
+      case 'getOrdersSummary':
+        return toolsErp.getOrdersSummaryErp(user);
       default:
         return { error: `Unknown tool: ${name}` };
     }
