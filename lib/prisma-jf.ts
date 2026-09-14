@@ -19,10 +19,10 @@ function createPrismaJfClient() {
 
   const pool = new Pool({
     connectionString,
-    max: 5,
+    max: 8,
     min: 0,
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
+    connectionTimeoutMillis: 15_000,
     ssl: isLocal ? false : { rejectUnauthorized: false },
   });
   const adapter = new PrismaPg(pool);
