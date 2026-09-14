@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { AlertTriangle, Clock, Hammer, Loader2, LogOut, RefreshCw, Send, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 import { clearToken, fetchInsights, getToken, sendChatStream, type Source } from '@/lib/client-api';
 import type { DelayedOrder, KarigarLoad, StageBottleneck, Summary } from '@/lib/tools';
@@ -27,7 +28,7 @@ import type {
 // karigarName+karigarCode vs karigarCode-only) are normalized into this
 // one shared display shape right after fetching. ERP's data is genuinely
 // different (metal/production flow, not orders) and gets its own entirely
-// separate rendering path — see ErpDashboard below — rather than being
+// separate rendering path — see ErpSection below — rather than being
 // forced through this shape.
 type DisplayOrder = { orderNo: string; primaryLabel: string; subLabel: string; daysLate: number };
 type DisplayKarigar = { key: string; label: string; activeOrderCount: number; delayedOrderCount: number };
@@ -100,10 +101,17 @@ const SOURCES: { value: Source; label: string }[] = [
   { value: 'erp', label: 'ERP' },
 ];
 
+// Chart colors — kept to the amber/neutral palette already used across
+// this app's theme (see globals.css) rather than introducing a clashing
+// chart-library default palette.
+const CHART_COLORS = { primary: '#c9862f', muted: '#a3a3a3', danger: '#dc2626', good: '#059669', sky: '#0284c7' };
+const PIPELINE_COLORS = [CHART_COLORS.sky, CHART_COLORS.muted, CHART_COLORS.good];
+
 export default function DashboardPage() {
   const router = useRouter();
-  const [source, setSource] = useState<Source>('o2d');
-  const [data, setData] = useState<StandardInsightsData | null>(null);
+  const [chatSource, setChatSource] = useState<Source>('o2d');
+  const [o2dData, setO2dData] = useState<StandardInsightsData | null>(null);
+  const [jfData, setJfData] = useState<StandardInsightsData | null>(null);
   const [erpData, setErpData] = useState<ErpInsightsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -112,29 +120,31 @@ export default function DashboardPage() {
   const [chatBusy, setChatBusy] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  async function load(activeSource: Source) {
+  async function loadAll() {
     setLoading(true);
     setError(null);
     try {
-      const insights = await fetchInsights(activeSource);
-      if (activeSource === 'erp') {
-        setErpData(insights as ErpInsightsData);
-        setData(null);
-      } else {
-        setData({
-          ...insights,
-          delayedOrders: normalizeDelayedOrders(activeSource, insights.delayedOrders),
-          stageBottlenecks: normalizeStageBottlenecks(insights.stageBottlenecks),
-          karigarLoad: normalizeKarigarLoad(activeSource, insights.karigarLoad),
-        });
-        setErpData(null);
-      }
+      // All three sources load in parallel — this is a unified,
+      // single-page view now (no more tab-switch-triggered fetch), so every
+      // source's data needs to be on screen at once.
+      const [o2d, jf, erp] = await Promise.all([fetchInsights('o2d'), fetchInsights('jf'), fetchInsights('erp')]);
+      setO2dData({
+        ...o2d,
+        delayedOrders: normalizeDelayedOrders('o2d', o2d.delayedOrders),
+        stageBottlenecks: normalizeStageBottlenecks(o2d.stageBottlenecks),
+        karigarLoad: normalizeKarigarLoad('o2d', o2d.karigarLoad),
+      });
+      setJfData({
+        ...jf,
+        delayedOrders: normalizeDelayedOrders('jf', jf.delayedOrders),
+        stageBottlenecks: normalizeStageBottlenecks(jf.stageBottlenecks),
+        karigarLoad: normalizeKarigarLoad('jf', jf.karigarLoad),
+      });
+      setErpData(erp as ErpInsightsData);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load insights');
-      // Never leave a previous (possibly different-source) load's data
-      // rendering underneath the error banner — a failed refresh/switch
-      // must show ONLY the error, not stale numbers from before it.
-      setData(null);
+      setO2dData(null);
+      setJfData(null);
       setErpData(null);
     } finally {
       setLoading(false);
@@ -151,7 +161,7 @@ export default function DashboardPage() {
       router.replace('/login');
       return;
     }
-    void load('o2d');
+    void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -159,17 +169,14 @@ export default function DashboardPage() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  function switchSource(next: Source) {
-    if (next === source) return;
-    setSource(next);
-    setData(null);
-    setErpData(null);
-    // Chat is scoped to whichever business is currently selected (see
+  function switchChatSource(next: Source) {
+    if (next === chatSource) return;
+    setChatSource(next);
+    // Chat is scoped to whichever source is picked in its own dropdown (see
     // lib/openai.ts's Source-keyed tool schemas) — clearing history on
-    // switch avoids a stale question/answer from one source's data
-    // sitting next to another's in the same thread.
+    // switch avoids a stale question/answer from one source's data sitting
+    // next to another's in the same thread.
     setChatMessages([]);
-    void load(next);
   }
 
   async function submitChat(e: React.FormEvent) {
@@ -194,7 +201,7 @@ export default function DashboardPage() {
             return updated;
           });
         },
-        source,
+        chatSource,
       );
     } catch (e) {
       setChatMessages((cur) => {
@@ -212,6 +219,12 @@ export default function DashboardPage() {
     router.replace('/login');
   }
 
+  function scrollTo(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  const anyData = o2dData || jfData || erpData;
+
   return (
     <div className="min-h-dvh bg-[var(--muted)]">
       {/* Amber bottom-border header, matching O2D's own topbar treatment. */}
@@ -222,12 +235,12 @@ export default function DashboardPage() {
           </span>
           <div>
             <h1 className="text-base font-semibold leading-tight">AI Production Incharge</h1>
-            <p className="text-xs text-[var(--muted-foreground)]">Read-only insights · {SOURCES.find((s) => s.value === source)?.label}</p>
+            <p className="text-xs text-[var(--muted-foreground)]">Read-only insights · Order to Delivery, Jewel Factory & ERP</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void load(source)}
+            onClick={() => void loadAll()}
             disabled={loading}
             className="flex h-9 items-center gap-1.5 rounded-lg border border-[var(--accent)] bg-[var(--accent)] px-3 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
           >
@@ -243,115 +256,232 @@ export default function DashboardPage() {
       </header>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6">
-        {/* Source switcher — same header/chat chrome either way, only the
-            insights section underneath changes shape for ERP. */}
-        <div className="flex w-fit gap-1 rounded-lg border border-[var(--border)] bg-[var(--card)] p-1">
-          {SOURCES.map((s) => (
-            <button
-              key={s.value}
-              onClick={() => switchSource(s.value)}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                source === s.value
-                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
-                  : 'text-[var(--muted-foreground)] hover:bg-[var(--accent)]'
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-
         {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
-        {loading && !data && !erpData && (
+        {loading && !anyData && (
           <div className="flex items-center gap-2 py-16 text-[var(--muted-foreground)]">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading live production data…
           </div>
         )}
 
-        {source === 'erp' && erpData && <ErpDashboard data={erpData} />}
-        {source !== 'erp' && data && <StandardDashboard data={data} />}
+        {anyData && (
+          <>
+            {/* Overview row — one glance across all three sources, click to
+                jump to that section. */}
+            <section className="grid gap-3 sm:grid-cols-3">
+              <OverviewCard
+                label="Order to Delivery"
+                onClick={() => scrollTo('section-o2d')}
+                active={o2dData?.summary.totalActive}
+                delayed={o2dData?.summary.totalDelayed}
+                urgent={o2dData?.summary.totalUrgent}
+              />
+              <OverviewCard
+                label="Jewel Factory"
+                onClick={() => scrollTo('section-jf')}
+                active={jfData?.summary.totalActive}
+                delayed={jfData?.summary.totalDelayed}
+                urgent={jfData?.summary.totalUrgent}
+              />
+              <OverviewCard
+                label="ERP"
+                onClick={() => scrollTo('section-erp')}
+                active={erpData?.jobPipeline.totalOrders}
+                delayed={undefined}
+                urgent={erpData?.alerts.length}
+                urgentLabel="alerts"
+              />
+            </section>
 
-        {(data || erpData) && (
-          /* Chat — shared across all three sources */
-          <section className="flex min-h-[420px] flex-col rounded-xl border border-[var(--border)] bg-[var(--card)]">
-            <div className="border-b border-[var(--border)] px-4 py-3">
-              <h2 className="text-sm font-semibold">Ask a question</h2>
-              <p className="text-xs text-[var(--muted-foreground)]">
-                {source === 'jf'
-                  ? 'e.g. "Which retailer\'s order is late?" · "How much work does karigar A54 have?"'
-                  : source === 'erp'
-                    ? 'e.g. "Which department has the worst recovery?" · "How is karigar Ramesh performing?"'
-                    : 'e.g. "Which urgent orders are late?" · "How much work does Ramesh have?"'}
-              </p>
-            </div>
-            <div className="flex-1 space-y-3 overflow-y-auto p-4">
-              {chatMessages.length === 0 && (
-                <p className="text-sm text-[var(--muted-foreground)]">Ask anything about current data for this source.</p>
-              )}
-              {chatMessages.map((m, i) => {
-                const isLastAssistant = m.role === 'assistant' && i === chatMessages.length - 1;
-                const stillWaitingForFirstChunk = isLastAssistant && chatBusy && m.content === '';
-                if (stillWaitingForFirstChunk) return null; // covered by the "Thinking…" bubble below
-                return (
-                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div
-                      className={`rounded-lg px-3 py-2 text-sm ${
-                        m.role === 'user'
-                          ? 'max-w-[80%] whitespace-pre-wrap bg-[var(--primary)] text-[var(--primary-foreground)]'
-                          : 'max-w-[95%] min-w-0 bg-[var(--muted)]'
-                      }`}
+            {/* Comparison chart — O2D vs Jewel Factory active/delayed/urgent
+                counts side by side, the one place a chart genuinely helps
+                compare across sources at a glance. */}
+            {o2dData && jfData && (
+              <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+                <h2 className="mb-3 text-sm font-semibold">Orders at a glance — Order to Delivery vs Jewel Factory</h2>
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={[
+                        { metric: 'Active', 'Order to Delivery': o2dData.summary.totalActive, 'Jewel Factory': jfData.summary.totalActive },
+                        { metric: 'Delayed', 'Order to Delivery': o2dData.summary.totalDelayed, 'Jewel Factory': jfData.summary.totalDelayed },
+                        { metric: 'Urgent', 'Order to Delivery': o2dData.summary.totalUrgent, 'Jewel Factory': jfData.summary.totalUrgent },
+                      ]}
+                      margin={{ top: 4, right: 8, left: -16, bottom: 0 }}
                     >
-                      {m.role === 'assistant' ? (
-                        <div className="chat-markdown">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{ table: ({ children }) => <div className="table-wrap"><table>{children}</table></div> }}
-                          >
-                            {m.content}
-                          </ReactMarkdown>
-                        </div>
-                      ) : (
-                        m.content
-                      )}
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
+                      <XAxis dataKey="metric" tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid var(--border)' }} />
+                      <Bar dataKey="Order to Delivery" fill={CHART_COLORS.primary} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="Jewel Factory" fill={CHART_COLORS.sky} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+            )}
+
+            {/* Order to Delivery section */}
+            {o2dData && (
+              <div id="section-o2d" className="scroll-mt-20 space-y-4">
+                <SectionHeading title="Order to Delivery" />
+                <StandardDashboard data={o2dData} />
+              </div>
+            )}
+
+            {/* Jewel Factory section */}
+            {jfData && (
+              <div id="section-jf" className="scroll-mt-20 space-y-4">
+                <SectionHeading title="Jewel Factory" />
+                <StandardDashboard data={jfData} />
+              </div>
+            )}
+
+            {/* ERP section */}
+            {erpData && (
+              <div id="section-erp" className="scroll-mt-20 space-y-4">
+                <SectionHeading title="ERP" />
+                <ErpSection data={erpData} />
+              </div>
+            )}
+
+            {/* Chat — one box, scoped by its own inline source dropdown so a
+                single unified page can still ask a question about any one
+                source without mixing data across them. */}
+            <section className="flex min-h-[420px] flex-col rounded-xl border border-[var(--border)] bg-[var(--card)]">
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+                <div>
+                  <h2 className="text-sm font-semibold">Ask the AI agent</h2>
+                  <p className="text-xs text-[var(--muted-foreground)]">
+                    {chatSource === 'jf'
+                      ? 'e.g. "Which retailer\'s order is late?" · "How much work does karigar A54 have?"'
+                      : chatSource === 'erp'
+                        ? 'e.g. "Which department has the worst recovery?" · "How is karigar Ramesh performing?"'
+                        : 'e.g. "Which urgent orders are late?" · "How much work does Ramesh have?"'}
+                  </p>
+                </div>
+                <select
+                  value={chatSource}
+                  onChange={(e) => switchChatSource(e.target.value as Source)}
+                  className="h-8 shrink-0 rounded-md border border-[var(--border)] bg-[var(--muted)] px-2 text-xs font-medium outline-none"
+                >
+                  {SOURCES.map((s) => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex-1 space-y-3 overflow-y-auto p-4">
+                {chatMessages.length === 0 && (
+                  <p className="text-sm text-[var(--muted-foreground)]">
+                    Ask anything about {SOURCES.find((s) => s.value === chatSource)?.label}'s current data.
+                  </p>
+                )}
+                {chatMessages.map((m, i) => {
+                  const isLastAssistant = m.role === 'assistant' && i === chatMessages.length - 1;
+                  const stillWaitingForFirstChunk = isLastAssistant && chatBusy && m.content === '';
+                  if (stillWaitingForFirstChunk) return null; // covered by the "Thinking…" bubble below
+                  return (
+                    <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div
+                        className={`rounded-lg px-3 py-2 text-sm ${
+                          m.role === 'user'
+                            ? 'max-w-[80%] whitespace-pre-wrap bg-[var(--primary)] text-[var(--primary-foreground)]'
+                            : 'max-w-[95%] min-w-0 bg-[var(--muted)]'
+                        }`}
+                      >
+                        {m.role === 'assistant' ? (
+                          <div className="chat-markdown">
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              components={{ table: ({ children }) => <div className="table-wrap"><table>{children}</table></div> }}
+                            >
+                              {m.content}
+                            </ReactMarkdown>
+                          </div>
+                        ) : (
+                          m.content
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {chatBusy && chatMessages[chatMessages.length - 1]?.content === '' && (
+                  <div className="flex justify-start">
+                    <div className="flex items-center gap-2 rounded-lg bg-[var(--muted)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Thinking…
                     </div>
                   </div>
-                );
-              })}
-              {chatBusy && chatMessages[chatMessages.length - 1]?.content === '' && (
-                <div className="flex justify-start">
-                  <div className="flex items-center gap-2 rounded-lg bg-[var(--muted)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Thinking…
-                  </div>
-                </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
-            <form onSubmit={submitChat} className="flex items-center gap-2 border-t border-[var(--border)] p-3">
-              <input
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask about orders, delays, karigar load…"
-                className="h-10 flex-1 rounded-md border border-[var(--input)] bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--ring)]"
-              />
-              <button
-                type="submit"
-                disabled={chatBusy || !chatInput.trim()}
-                className="flex h-10 w-10 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            </form>
-          </section>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+              <form onSubmit={submitChat} className="flex items-center gap-2 border-t border-[var(--border)] p-3">
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder={`Ask about ${SOURCES.find((s) => s.value === chatSource)?.label}…`}
+                  className="h-10 flex-1 rounded-md border border-[var(--input)] bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                />
+                <button
+                  type="submit"
+                  disabled={chatBusy || !chatInput.trim()}
+                  className="flex h-10 w-10 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50"
+                >
+                  <Send className="h-4 w-4" />
+                </button>
+              </form>
+            </section>
+          </>
         )}
       </main>
     </div>
   );
 }
 
+function SectionHeading({ title }: { title: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-5 w-1 rounded-full bg-[var(--primary)]" />
+      <h2 className="text-base font-semibold">{title}</h2>
+    </div>
+  );
+}
+
+function OverviewCard({
+  label,
+  onClick,
+  active,
+  delayed,
+  urgent,
+  urgentLabel = 'urgent',
+}: {
+  label: string;
+  onClick: () => void;
+  active?: number;
+  delayed?: number;
+  urgent?: number;
+  urgentLabel?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-left transition-shadow hover:shadow-md"
+    >
+      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{label}</p>
+      <p className="mt-1 text-2xl font-semibold">{active ?? '—'}</p>
+      <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+        {delayed !== undefined && <span className="text-amber-600">{delayed} delayed</span>}
+        {delayed !== undefined && urgent !== undefined && ' · '}
+        {urgent !== undefined && <span className="text-red-600">{urgent} {urgentLabel}</span>}
+      </p>
+    </button>
+  );
+}
+
 /** O2D and Jewel Factory's shared dashboard shape: stat cards + narrative +
- * delayed orders / stage bottlenecks / karigar load panels. */
+ * delayed orders / stage bottlenecks (chart) / karigar load panels. */
 function StandardDashboard({ data }: { data: StandardInsightsData }) {
+  const bottleneckChartData = data.stageBottlenecks.slice(0, 8).map((s) => ({ stage: s.stage, count: s.count }));
+
   return (
     <>
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -365,7 +495,7 @@ function StandardDashboard({ data }: { data: StandardInsightsData }) {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Clock className="h-4 w-4 text-amber-600" /> Delayed orders</h2>
+          <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Clock className="h-4 w-4 text-amber-600" /> Delayed orders</h3>
           <div className="max-h-80 space-y-1.5 overflow-y-auto">
             {data.delayedOrders.length === 0 && <p className="text-xs text-[var(--muted-foreground)]">Nothing overdue right now.</p>}
             {data.delayedOrders.map((o) => (
@@ -381,22 +511,26 @@ function StandardDashboard({ data }: { data: StandardInsightsData }) {
         </section>
 
         <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><AlertTriangle className="h-4 w-4 text-orange-600" /> Stage bottlenecks</h2>
-          <div className="max-h-80 space-y-1.5 overflow-y-auto">
-            {data.stageBottlenecks.map((s) => (
-              <div key={s.key} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{s.stage}</p>
-                  {s.oldestRef && <p className="truncate text-[var(--muted-foreground)]">Oldest: {s.oldestRef} ({s.oldestAgeDays}d)</p>}
-                </div>
-                <span className="shrink-0 rounded-full bg-[var(--secondary)] px-2 py-0.5 font-semibold">{s.count}</span>
-              </div>
-            ))}
-          </div>
+          <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><AlertTriangle className="h-4 w-4 text-orange-600" /> Stage bottlenecks</h3>
+          {bottleneckChartData.length > 0 ? (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={bottleneckChartData} layout="vertical" margin={{ top: 0, right: 12, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border)" />
+                  <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <YAxis dataKey="stage" type="category" width={90} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid var(--border)' }} />
+                  <Bar dataKey="count" fill={CHART_COLORS.primary} radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-xs text-[var(--muted-foreground)]">No active orders right now.</p>
+          )}
         </section>
 
         <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Hammer className="h-4 w-4 text-blue-600" /> Karigar load</h2>
+          <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Hammer className="h-4 w-4 text-blue-600" /> Karigar load</h3>
           <div className="max-h-80 space-y-1.5 overflow-y-auto">
             {data.karigarLoad.map((k) => (
               <div key={k.key} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
@@ -418,9 +552,15 @@ function StandardDashboard({ data }: { data: StandardInsightsData }) {
  * widgets (StatCardsRow, SummaryTilesRow, JobPipelinePanel,
  * DepartmentEfficiencyChart, KarigarRankingPanels, RecentActivityPanel,
  * UrgentDispatchPanel) rather than the O2D/JF "orders" pattern. */
-function ErpDashboard({ data }: { data: ErpInsightsData }) {
+function ErpSection({ data }: { data: ErpInsightsData }) {
   const topKarigars = data.karigarRankings.slice(0, 5);
   const bottomKarigars = [...data.karigarRankings].reverse().slice(0, 4);
+  const pipelineChartData = [
+    { name: 'Queued', value: data.jobPipeline.queued },
+    { name: 'In progress', value: data.jobPipeline.inProgress },
+    { name: 'Ready', value: data.jobPipeline.ready },
+  ];
+  const deptChartData = data.departmentEfficiency.map((d) => ({ dept: d.dept, recovery: Number(d.recoveryPercent.toFixed(1)) }));
 
   return (
     <>
@@ -481,39 +621,58 @@ function ErpDashboard({ data }: { data: ErpInsightsData }) {
         </div>
       </section>
 
-      {/* Job pipeline */}
+      {/* Job pipeline — donut chart */}
       <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <h2 className="mb-3 text-sm font-semibold">Job pipeline — {data.jobPipeline.totalOrders} active</h2>
-        <div className="grid grid-cols-3 gap-3 text-center">
-          <PipelineStat label="Queued" value={data.jobPipeline.queued} total={data.jobPipeline.totalOrders} color="text-sky-700" />
-          <PipelineStat label="In progress" value={data.jobPipeline.inProgress} total={data.jobPipeline.totalOrders} color="text-[var(--muted-foreground)]" />
-          <PipelineStat label="Ready" value={data.jobPipeline.ready} total={data.jobPipeline.totalOrders} color="text-emerald-700" />
+        <h3 className="mb-3 text-sm font-semibold">Job pipeline — {data.jobPipeline.totalOrders} active</h3>
+        <div className="flex flex-col items-center gap-4 sm:flex-row">
+          <div className="h-48 w-48 shrink-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={pipelineChartData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={70} paddingAngle={2}>
+                  {pipelineChartData.map((_, i) => (
+                    <Cell key={i} fill={PIPELINE_COLORS[i]} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid var(--border)' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="grid flex-1 grid-cols-3 gap-3 text-center">
+            <PipelineStat label="Queued" value={data.jobPipeline.queued} total={data.jobPipeline.totalOrders} color="text-sky-700" />
+            <PipelineStat label="In progress" value={data.jobPipeline.inProgress} total={data.jobPipeline.totalOrders} color="text-[var(--muted-foreground)]" />
+            <PipelineStat label="Ready" value={data.jobPipeline.ready} total={data.jobPipeline.totalOrders} color="text-emerald-700" />
+          </div>
         </div>
       </section>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* Department efficiency */}
+        {/* Department efficiency — bar chart + list */}
         <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 lg:col-span-2">
-          <h2 className="mb-3 text-sm font-semibold">Department recovery %</h2>
-          <div className="max-h-80 space-y-1.5 overflow-y-auto">
-            {data.departmentEfficiency.length === 0 && <p className="text-xs text-[var(--muted-foreground)]">No completed department returns yet.</p>}
-            {data.departmentEfficiency.map((d) => (
-              <div key={d.dept} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{d.dept}</p>
-                  <p className="truncate text-[var(--muted-foreground)]">{d.issuedWeight.toFixed(3)}g issued · {d.returnedWeight.toFixed(3)}g returned</p>
-                </div>
-                <span className={`shrink-0 rounded-full px-2 py-0.5 font-semibold ${d.recoveryPercent >= 98.3 ? 'bg-emerald-100 text-emerald-700' : 'bg-[var(--secondary)]'}`}>
-                  {d.recoveryPercent.toFixed(1)}%
-                </span>
-              </div>
-            ))}
-          </div>
+          <h3 className="mb-3 text-sm font-semibold">Department recovery %</h3>
+          {deptChartData.length > 0 ? (
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={deptChartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="dept" tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} unit="%" />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid var(--border)' }} />
+                  <Bar dataKey="recovery" radius={[4, 4, 0, 0]}>
+                    {deptChartData.map((d, i) => (
+                      <Cell key={i} fill={d.recovery >= 98.3 ? CHART_COLORS.good : CHART_COLORS.primary} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-xs text-[var(--muted-foreground)]">No completed department returns yet.</p>
+          )}
         </section>
 
         {/* Recent activity */}
         <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <h2 className="mb-3 text-sm font-semibold">Recent activity</h2>
+          <h3 className="mb-3 text-sm font-semibold">Recent activity</h3>
           <div className="max-h-80 space-y-1.5 overflow-y-auto">
             {data.recentActivity.length === 0 && <p className="text-xs text-[var(--muted-foreground)]">Awaiting movement records…</p>}
             {data.recentActivity.map((r) => (
@@ -529,7 +688,7 @@ function ErpDashboard({ data }: { data: ErpInsightsData }) {
       {/* Karigar ranking */}
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <h2 className="mb-3 text-sm font-semibold">Top performing karigars</h2>
+          <h3 className="mb-3 text-sm font-semibold">Top performing karigars</h3>
           <div className="space-y-1.5">
             {topKarigars.length === 0 && <p className="text-xs text-[var(--muted-foreground)]">No completed karigar returns yet.</p>}
             {topKarigars.map((k, i) => (
@@ -545,7 +704,7 @@ function ErpDashboard({ data }: { data: ErpInsightsData }) {
         </section>
 
         <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <h2 className="mb-3 text-sm font-semibold">Needs attention</h2>
+          <h3 className="mb-3 text-sm font-semibold">Needs attention</h3>
           <div className="space-y-1.5">
             {bottomKarigars.length === 0 && <p className="text-xs text-[var(--muted-foreground)]">Global efficiency targets met.</p>}
             {bottomKarigars.map((k, i) => (
