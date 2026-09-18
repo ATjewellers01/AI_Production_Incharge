@@ -248,39 +248,62 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-dvh bg-[var(--muted)]">
-      {/* Amber bottom-border header, matching O2D's own topbar treatment. */}
-      <header className="sticky top-0 z-10 flex h-[58px] items-center justify-between border-b border-[var(--accent)] bg-[var(--card)] px-4 sm:px-6">
-        <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)]">
+      {/* Amber bottom-border header, matching O2D's own topbar treatment.
+          h-auto on the smallest screens so the brand text can wrap to two
+          lines without clipping instead of forcing a fixed height. */}
+      <header className="sticky top-0 z-10 flex min-h-[58px] flex-wrap items-center justify-between gap-2 border-b border-[var(--accent)] bg-[var(--card)] px-3 py-2 sm:px-6">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)]">
             <Sparkles className="h-4.5 w-4.5" />
           </span>
-          <div>
-            <h1 className="text-base font-semibold leading-tight">AI Production Incharge</h1>
-            <p className="text-xs text-[var(--muted-foreground)]">Read-only insights · Order to Delivery, Jewel Factory & ERP</p>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-semibold leading-tight sm:text-base">AI Production Incharge</h1>
+            <p className="truncate text-[11px] text-[var(--muted-foreground)] sm:text-xs">
+              Read-only insights · Order to Delivery, Jewel Factory & ERP
+            </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <button
             onClick={() => void loadAll()}
             disabled={loading}
-            className="flex h-9 items-center gap-1.5 rounded-lg border border-[var(--accent)] bg-[var(--accent)] px-3 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+            aria-label="Refresh"
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-[var(--accent)] bg-[var(--accent)] px-2.5 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60 sm:px-3"
           >
-            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            <span className="hidden sm:inline">Refresh</span>
           </button>
           <button
             onClick={signOut}
-            className="flex h-9 items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-3 text-sm text-red-500 hover:bg-red-100"
+            aria-label="Sign out"
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 text-sm text-red-500 hover:bg-red-100 sm:px-3"
           >
-            <LogOut className="h-3.5 w-3.5" /> Sign out
+            <LogOut className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Sign out</span>
           </button>
         </div>
       </header>
 
+      {/* Mobile section nav — the left sidebar (below) is hidden under
+          `sm`, so narrow screens get this horizontally-scrollable pill bar
+          instead, keeping the same jump-to-section + active-highlight
+          behavior without needing sidebar width. */}
+      <nav className="sticky top-[58px] z-10 flex gap-2 overflow-x-auto border-b border-[var(--border)] bg-[var(--card)] px-3 py-2 sm:hidden">
+        <MobileNavPill
+          label="Order to Delivery"
+          active={activeSection === 'section-o2d'}
+          onClick={() => scrollTo('section-o2d')}
+        />
+        <MobileNavPill label="Jewel Factory" active={activeSection === 'section-jf'} onClick={() => scrollTo('section-jf')} />
+        <MobileNavPill label="ERP" active={activeSection === 'section-erp'} onClick={() => scrollTo('section-erp')} />
+      </nav>
+
       <div className="mx-auto flex max-w-7xl items-start">
         {/* Left sidebar — source navigation, replaces the earlier tab
             switcher/overview-cards-only approach. Active section highlight
-            tracks scroll position via the IntersectionObserver above. */}
-        <nav className="sticky top-[58px] hidden h-[calc(100dvh-58px)] w-56 shrink-0 flex-col gap-1 overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] p-3 sm:flex">
+            tracks scroll position via the IntersectionObserver above.
+            Hidden below `sm` — see the MobileNavPill bar above instead. */}
+        <nav className="sticky top-[58px] hidden h-[calc(100dvh-58px)] w-48 shrink-0 flex-col gap-1 overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] p-3 sm:flex md:w-56">
           <SidebarLink
             icon={<Truck className="h-4 w-4" />}
             label="Order to Delivery"
@@ -304,7 +327,7 @@ export default function DashboardPage() {
           />
         </nav>
 
-        <main className="flex min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6">
+        <main className="flex min-w-0 flex-1 flex-col gap-4 p-3 sm:gap-6 sm:p-6">
           {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
           {loading && !anyData && (
@@ -345,7 +368,7 @@ export default function DashboardPage() {
 
             {/* Order to Delivery section */}
             {o2dData && (
-              <div id="section-o2d" className="scroll-mt-20 space-y-4">
+              <div id="section-o2d" className="scroll-mt-28 sm:scroll-mt-20 space-y-4">
                 <SectionHeading title="Order to Delivery" />
                 <StandardDashboard data={o2dData} />
               </div>
@@ -353,7 +376,7 @@ export default function DashboardPage() {
 
             {/* Jewel Factory section */}
             {jfData && (
-              <div id="section-jf" className="scroll-mt-20 space-y-4">
+              <div id="section-jf" className="scroll-mt-28 sm:scroll-mt-20 space-y-4">
                 <SectionHeading title="Jewel Factory" />
                 <StandardDashboard data={jfData} />
               </div>
@@ -361,7 +384,7 @@ export default function DashboardPage() {
 
             {/* ERP section */}
             {erpData && (
-              <div id="section-erp" className="scroll-mt-20 space-y-4">
+              <div id="section-erp" className="scroll-mt-28 sm:scroll-mt-20 space-y-4">
                 <SectionHeading title="ERP" />
                 <ErpSection data={erpData} />
               </div>
@@ -493,6 +516,19 @@ function SectionHeading({ title }: { title: string }) {
       <div className="h-5 w-1 rounded-full bg-[var(--primary)]" />
       <h2 className="text-base font-semibold">{title}</h2>
     </div>
+  );
+}
+
+function MobileNavPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+        active ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
