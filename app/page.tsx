@@ -10,6 +10,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer,
 import { clearToken, fetchInsights, getToken, sendChatStream, type Source } from '@/lib/client-api';
 import type { DelayedOrder, KarigarLoad, StageBottleneck, Summary } from '@/lib/tools';
 import type { DelayedOrderJf, KarigarLoadJf, StageBottleneckJf, SummaryJf } from '@/lib/tools-jf';
+import type { TatDelaysResult } from '@/lib/tat';
 import type {
   MetalStockSummary,
   DepartmentEfficiencyErp,
@@ -39,6 +40,8 @@ type StandardInsightsData = {
   delayedOrders: DisplayOrder[];
   stageBottlenecks: DisplayBottleneck[];
   karigarLoad: DisplayKarigar[];
+  /** O2D only — stage-wise TAT delays (lib/tat.ts). Absent for Jewel Factory. */
+  tatDelays?: TatDelaysResult | null;
   narrative: string | null;
 };
 
@@ -565,6 +568,66 @@ function SidebarLink({
   );
 }
 
+/** Orders stuck in a stage past its TAT limit (Metal issue / Production /
+ * Finishing), most overdue first, with a Customer-vs-Stock filter. */
+function TatDelaysPanel({ tat }: { tat: TatDelaysResult }) {
+  const [kind, setKind] = useState<'All' | 'Customer' | 'Stock'>('All');
+  const rows = tat.delays.filter((d) => kind === 'All' || d.orderKind === kind);
+
+  return (
+    <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+          <Clock className="h-4 w-4 text-red-600" /> TAT delays — where to give attention ({tat.total})
+        </h3>
+        <div className="flex gap-1 text-xs">
+          {(['All', 'Customer', 'Stock'] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => setKind(k)}
+              className={`rounded-full px-2.5 py-1 font-medium ${kind === k ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--muted)] hover:bg-[var(--accent)]'}`}
+            >
+              {k}
+              {k !== 'All' && ` (${tat.byKind[k]})`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mb-3 grid gap-2 sm:grid-cols-3">
+        {tat.rules.map((r) => (
+          <div key={r.key} className="rounded-md bg-[var(--muted)] px-3 py-2 text-xs">
+            <p className="font-medium">{r.label}</p>
+            <p className="text-[var(--muted-foreground)]">limit {r.limitDays} days</p>
+            <p className={tat.byRule[r.key] > 0 ? 'font-semibold text-red-600' : 'text-emerald-600'}>{tat.byRule[r.key]} delayed</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="max-h-80 space-y-1.5 overflow-y-auto">
+        {rows.length === 0 && <p className="text-xs text-[var(--muted-foreground)]">No TAT delays right now.</p>}
+        {rows.map((d) => (
+          <div key={`${d.rule}-${d.orderNo}`} className="flex items-center justify-between rounded-md bg-[var(--muted)] px-2.5 py-1.5 text-xs">
+            <div className="min-w-0">
+              <p className="truncate font-medium">
+                {d.orderNo} · {d.companyName}
+              </p>
+              <p className="truncate text-[var(--muted-foreground)]">
+                {d.ruleLabel} · {d.stage} · {d.orderKind}
+                {d.orderType === 'URGENT' ? ' (urgent)' : ''}
+                {d.karigarName ? ` · ${d.karigarName}` : ''}
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700">
+              {d.daysInStage}d / {d.limitDays}d
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /** O2D and Jewel Factory's shared dashboard shape: stat cards + narrative +
  * delayed orders / stage bottlenecks (chart) / karigar load panels. */
 function StandardDashboard({ data }: { data: StandardInsightsData }) {
@@ -580,6 +643,8 @@ function StandardDashboard({ data }: { data: StandardInsightsData }) {
       </section>
 
       {data.narrative && <NarrativeCard text={data.narrative} />}
+
+      {data.tatDelays && <TatDelaysPanel tat={data.tatDelays} />}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">

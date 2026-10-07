@@ -171,11 +171,39 @@ model Order {
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 
+  processHistory ProcessHistory[]
+
   @@index([status])
   @@index([status, currentStage])
   @@index([createdAt(sort: Desc)])
   @@index([karigarId])
   @@index([branchId])
+}
+
+enum ProcessStatus {
+  PENDING
+  DONE
+  REJECTED
+}
+
+// Subset of at-order-to-dispatch-backend's ProcessHistory — one row per stage
+// submission, append-only. Read here ONLY to find when an order last moved
+// (lib/tat.ts uses the newest row's createdAt as "entered the current stage").
+// branchId is kept as a plain column (the real table has a FK to Branch, but
+// this read-only client never needs that relation).
+model ProcessHistory {
+  id        String        @id
+  branchId  String
+  orderId   String
+  order     Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  stage     String
+  status    ProcessStatus @default(PENDING)
+  userId    String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([orderId])
+  @@index([orderId, stage])
 }
 
 // ── ERP models (added 2026-09-14, extended same day for the real ERP

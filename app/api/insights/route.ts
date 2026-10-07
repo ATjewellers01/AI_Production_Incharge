@@ -14,6 +14,7 @@ import {
   getOrdersSummaryErp,
   deriveUrgentAlertsErp,
 } from '@/lib/tools-erp';
+import { getTatDelays, type TatDelaysResult } from '@/lib/tat';
 import { getOpenAI, CHAT_MODEL, type Source } from '@/lib/openai';
 
 /**
@@ -53,6 +54,7 @@ export async function GET(req: NextRequest) {
   }
 
   let summary, delayedOrders, stageBottlenecks, karigarLoad;
+  let tatDelays: TatDelaysResult | null = null;
   try {
     if (source === 'jf') {
       [summary, delayedOrders, stageBottlenecks, karigarLoad] = await Promise.all([
@@ -62,11 +64,12 @@ export async function GET(req: NextRequest) {
         getKarigarLoadJf(user),
       ]);
     } else {
-      [summary, delayedOrders, stageBottlenecks, karigarLoad] = await Promise.all([
+      [summary, delayedOrders, stageBottlenecks, karigarLoad, tatDelays] = await Promise.all([
         getSummary(user),
         getDelayedOrders(user),
         getStageBottlenecks(user),
         getKarigarLoad(user),
+        getTatDelays(user),
       ]);
     }
   } catch (e) {
@@ -83,7 +86,7 @@ export async function GET(req: NextRequest) {
       const narrativeSystemPrompt =
         source === 'jf'
           ? 'You are a production-floor analyst for a jewellery manufacturer (Jewel Factory). Given raw JSON data (delayed orders across Catalogue/Store Customer/Customised orders, stage bottlenecks, karigar workload), write a short (4-6 sentence) plain-language briefing a manufacturer would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.'
-          : 'You are a production-floor analyst for a jewellery order-to-delivery system. Given raw JSON data (delayed orders, stage bottlenecks, karigar workload), write a short (4-6 sentence) plain-language briefing a production incharge would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.';
+          : 'You are a production-floor analyst for a jewellery order-to-delivery system. Given raw JSON data (delayed orders, stage bottlenecks, karigar workload, and tatDelays = orders stuck in a stage past its TAT limit), write a short (4-6 sentence) plain-language briefing a production incharge would read first thing. Call out the single most urgent thing to act on. No price/monetary language. Do not invent any number not present in the data.';
 
       const completion = await getOpenAI().chat.completions.create({
         model: CHAT_MODEL,
@@ -91,7 +94,13 @@ export async function GET(req: NextRequest) {
           { role: 'system', content: narrativeSystemPrompt },
           {
             role: 'user',
-            content: JSON.stringify({ summary, delayedOrders: delayedOrders.slice(0, 20), stageBottlenecks, karigarLoad: karigarLoad.slice(0, 20) }),
+            content: JSON.stringify({
+              summary,
+              delayedOrders: delayedOrders.slice(0, 20),
+              stageBottlenecks,
+              karigarLoad: karigarLoad.slice(0, 20),
+              ...(tatDelays ? { tatDelays: { rules: tatDelays.rules, total: tatDelays.total, byRule: tatDelays.byRule, byKind: tatDelays.byKind, top: tatDelays.delays.slice(0, 15) } } : {}),
+            }),
           },
         ],
         temperature: 0.3,
@@ -102,7 +111,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ success: true, data: { summary, delayedOrders, stageBottlenecks, karigarLoad, narrative } });
+  return NextResponse.json({ success: true, data: { summary, delayedOrders, stageBottlenecks, karigarLoad, tatDelays, narrative } });
 }
 
 async function handleErpInsights(user: Awaited<ReturnType<typeof requireUser>>) {

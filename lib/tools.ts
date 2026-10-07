@@ -13,7 +13,7 @@ import type { AuthUser } from './auth';
 // don't already expose — the LLM cannot write its own SQL/Prisma query.
 
 /** ADMIN is pinned to their own branch; SUPER_ADMIN sees every branch (optionally narrowed later). */
-function branchScope(user: AuthUser) {
+export function branchScope(user: AuthUser) {
   return user.role === 'SUPER_ADMIN' ? {} : { branchId: user.branchId ?? '__none__' };
 }
 

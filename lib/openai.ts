@@ -4,6 +4,7 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import * as tools from './tools';
 import * as toolsJf from './tools-jf';
 import * as toolsErp from './tools-erp';
+import { getTatDelays, type TatFilters } from './tat';
 import type { AuthUser } from './auth';
 
 // Lazy singleton — NOT constructed at module load. The OpenAI SDK throws
@@ -108,6 +109,22 @@ const TOOL_SCHEMAS_O2D: ChatCompletionTool[] = [
       name: 'getSummary',
       description: 'Quick top-line counts: total active orders, total delayed, total urgent, total completed today.',
       parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getTatDelays',
+      description:
+        'Stage-wise TAT (turnaround time) delays: active orders that have sat in their current stage longer than the limit — Metal issue (waiting at "In Process") > 2 days, Production (at "Follow Up") > 5 days, Finishing (Meena/Polish stages) > 2 days. Returns the most overdue first, with counts per rule and per order kind (Customer vs Stock). Use for "where should we give attention / which orders are stuck / TAT delay" questions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          rule: { type: 'string', enum: ['METAL_ISSUE', 'PRODUCTION', 'FINISHING'], description: 'Optional: only this rule' },
+          orderKind: { type: 'string', enum: ['Customer', 'Stock'], description: 'Optional: customer orders vs stock orders' },
+          limit: { type: 'number', description: 'Max rows to return, default 100' },
+        },
+      },
     },
   },
 ];
@@ -291,6 +308,10 @@ they appear in the data regardless of reply language — never translate those.`
 
 const SYSTEM_PROMPT_O2D = `You are the AI Production Incharge for a jewellery order-to-delivery production system (Order to Delivery / O2D).
 
+For "where should we give attention" questions, use getTatDelays: it lists orders stuck
+in a stage past its TAT limit (Metal issue > 2 days, Production > 5 days, Finishing > 2
+days), split into Customer vs Stock orders. Lead with the most overdue orders.
+
 ${SYSTEM_PROMPT_BASE}`;
 
 const SYSTEM_PROMPT_JF = `You are the AI Production Incharge for Jewel Factory's manufacturer-side production system.
@@ -394,6 +415,8 @@ export async function runTool(name: string, args: Record<string, unknown>, user:
       return tools.searchOrders(user, args as tools.SearchFilters);
     case 'getSummary':
       return tools.getSummary(user);
+    case 'getTatDelays':
+      return getTatDelays(user, { rule: args.rule as TatFilters['rule'], orderKind: args.orderKind as TatFilters['orderKind'] }, args.limit as number | undefined);
     default:
       return { error: `Unknown tool: ${name}` };
   }
