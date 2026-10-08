@@ -604,6 +604,48 @@ function TatDelaysPanel({ tat }: { tat: TatDelaysResult }) {
         ))}
       </div>
 
+      {tat.total > 0 && (
+        <div className="mb-3 grid gap-3 lg:grid-cols-2">
+          <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs">
+            <p className="mb-1.5 font-semibold text-red-700">Action plan — aaj yahan dhyan do</p>
+            <ol className="list-decimal space-y-1 pl-4 text-red-900">
+              {tat.analysis.actionPlan.map((a, i) => (
+                <li key={i}>{a}</li>
+              ))}
+            </ol>
+          </div>
+          <div className="rounded-md bg-[var(--muted)] p-3 text-xs">
+            <p className="mb-1.5 font-semibold">Stage-wise &amp; karigar-wise problems</p>
+            <ul className="list-disc space-y-1 pl-4">
+              {tat.analysis.byStage.slice(0, 3).map((s) => (
+                <li key={s.stage}>
+                  <span className="font-medium">{s.stage}</span> — {s.count} delayed, worst {s.worstOrderNo} ({s.maxDaysOver}d over)
+                </li>
+              ))}
+              {tat.analysis.byKarigar.slice(0, 3).map((k) => (
+                <li key={k.karigarName}>
+                  <span className="font-medium">{k.karigarName}</span> — {k.delayedCount} delayed, worst {k.worstOrderNo}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {tat.analysis.priority.length > 0 && (
+        <div className="mb-3 rounded-md border border-[var(--border)] p-3 text-xs">
+          <p className="mb-1.5 font-semibold">Pehle in orders ko dekho</p>
+          <ul className="space-y-1">
+            {tat.analysis.priority.map((p) => (
+              <li key={`${p.rule}-${p.orderNo}`}>
+                <span className="font-medium">{p.orderNo}</span> · {p.companyName} · {p.orderKind}
+                {p.orderType === 'URGENT' ? ' (urgent)' : ''} → <span className="text-[var(--muted-foreground)]">{p.suggestion}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="max-h-80 space-y-1.5 overflow-y-auto">
         {rows.length === 0 && <p className="text-xs text-[var(--muted-foreground)]">No TAT delays right now.</p>}
         {rows.map((d) => (

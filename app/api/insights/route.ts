@@ -99,7 +99,7 @@ export async function GET(req: NextRequest) {
               delayedOrders: delayedOrders.slice(0, 20),
               stageBottlenecks,
               karigarLoad: karigarLoad.slice(0, 20),
-              ...(tatDelays ? { tatDelays: { rules: tatDelays.rules, total: tatDelays.total, byRule: tatDelays.byRule, byKind: tatDelays.byKind, top: tatDelays.delays.slice(0, 15) } } : {}),
+              ...(tatDelays ? { tatDelays: { rules: tatDelays.rules, total: tatDelays.total, byRule: tatDelays.byRule, byKind: tatDelays.byKind, analysis: tatDelays.analysis } } : {}),
             }),
           },
         ],

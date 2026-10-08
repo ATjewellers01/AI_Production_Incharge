@@ -65,11 +65,43 @@ export type TatDelay = {
   daysOver: number;
 };
 
+/** One of the top "look at this first" orders, with a data-derived suggestion. */
+export type TatPriorityItem = TatDelay & { suggestion: string };
+
+export type TatStageInsight = {
+  rule: TatRuleKey;
+  ruleLabel: string;
+  stage: string;
+  count: number;
+  worstOrderNo: string;
+  maxDaysOver: number;
+  suggestion: string;
+};
+
+export type TatKarigarInsight = {
+  karigarName: string;
+  delayedCount: number;
+  worstOrderNo: string;
+  maxDaysOver: number;
+  suggestion: string;
+};
+
+/** Read-only analysis built ONLY from the delayed-order data — every number and
+ * order/karigar name comes from the database, and every suggestion is a plain
+ * "look at / follow up" pointer. Nothing here changes any order. */
+export type TatAnalysis = {
+  priority: TatPriorityItem[];
+  byStage: TatStageInsight[];
+  byKarigar: TatKarigarInsight[];
+  actionPlan: string[];
+};
+
 export type TatDelaysResult = {
   rules: Array<{ key: TatRuleKey; label: string; stages: string[]; limitDays: number }>;
   total: number;
   byRule: Record<TatRuleKey, number>;
   byKind: Record<OrderKind, number>;
+  analysis: TatAnalysis;
   delays: TatDelay[];
 };
 
@@ -77,6 +109,93 @@ export type TatFilters = { rule?: TatRuleKey; orderKind?: OrderKind };
 
 const DAY_MS = 86_400_000;
 const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/** Urgent orders and customer orders float above equally-late stock orders. */
+function priorityScore(d: TatDelay): number {
+  return d.daysOver + (d.orderType === 'URGENT' ? 5 : 0) + (d.orderKind === 'Customer' ? 1 : 0);
+}
+
+function orderSuggestion(d: TatDelay): string {
+  switch (d.rule) {
+    case 'METAL_ISSUE':
+      return `Issue metal for ${d.orderNo} today — waiting ${d.daysInStage}d at ${d.stage} (limit ${d.limitDays}d).`;
+    case 'PRODUCTION':
+      return `Follow up with ${d.karigarName ?? 'the karigar'} on ${d.orderNo} — ${d.daysInStage}d at ${d.stage} (limit ${d.limitDays}d).`;
+    case 'FINISHING':
+      return `Check ${d.stage} for ${d.orderNo} — ${d.daysInStage}d (limit ${d.limitDays}d); get it moved to the next stage.`;
+  }
+}
+
+function stageSuggestion(rule: TatRuleKey, stage: string, count: number): string {
+  switch (rule) {
+    case 'METAL_ISSUE':
+      return `Clear the metal-issue queue first: ${count} order${count === 1 ? '' : 's'} still waiting at ${stage}.`;
+    case 'PRODUCTION':
+      return `Review karigar progress: ${count} order${count === 1 ? '' : 's'} stuck at ${stage}.`;
+    case 'FINISHING':
+      return `Check the finishing floor: ${count} order${count === 1 ? '' : 's'} stuck at ${stage}.`;
+  }
+}
+
+function buildAnalysis(delays: TatDelay[]): TatAnalysis {
+  const priority: TatPriorityItem[] = [...delays]
+    .sort((a, b) => priorityScore(b) - priorityScore(a))
+    .slice(0, 5)
+    .map((d) => ({ ...d, suggestion: orderSuggestion(d) }));
+
+  const stageMap = new Map<string, TatStageInsight>();
+  for (const d of delays) {
+    const existing = stageMap.get(d.stage);
+    if (!existing) {
+      stageMap.set(d.stage, { rule: d.rule, ruleLabel: d.ruleLabel, stage: d.stage, count: 1, worstOrderNo: d.orderNo, maxDaysOver: d.daysOver, suggestion: '' });
+    } else {
+      existing.count++;
+      if (d.daysOver > existing.maxDaysOver) {
+        existing.maxDaysOver = d.daysOver;
+        existing.worstOrderNo = d.orderNo;
+      }
+    }
+  }
+  const byStage = Array.from(stageMap.values())
+    .map((s) => ({ ...s, suggestion: stageSuggestion(s.rule, s.stage, s.count) }))
+    .sort((a, b) => b.count - a.count || b.maxDaysOver - a.maxDaysOver);
+
+  const karigarMap = new Map<string, TatKarigarInsight>();
+  for (const d of delays) {
+    if (!d.karigarName) continue;
+    const existing = karigarMap.get(d.karigarName);
+    if (!existing) {
+      karigarMap.set(d.karigarName, { karigarName: d.karigarName, delayedCount: 1, worstOrderNo: d.orderNo, maxDaysOver: d.daysOver, suggestion: '' });
+    } else {
+      existing.delayedCount++;
+      if (d.daysOver > existing.maxDaysOver) {
+        existing.maxDaysOver = d.daysOver;
+        existing.worstOrderNo = d.orderNo;
+      }
+    }
+  }
+  const byKarigar = Array.from(karigarMap.values())
+    .map((k) => ({
+      ...k,
+      suggestion:
+        k.delayedCount >= 3
+          ? `${k.delayedCount} delayed orders with ${k.karigarName} — hold new work for them until these are cleared; start with ${k.worstOrderNo}.`
+          : `Follow up with ${k.karigarName} on ${k.worstOrderNo} (${k.maxDaysOver}d over the limit).`,
+    }))
+    .sort((a, b) => b.delayedCount - a.delayedCount || b.maxDaysOver - a.maxDaysOver)
+    .slice(0, 5);
+
+  const actionPlan: string[] = [];
+  if (priority[0]) actionPlan.push(priority[0].suggestion);
+  if (byStage[0]) actionPlan.push(byStage[0].suggestion);
+  if (byKarigar[0]) actionPlan.push(byKarigar[0].suggestion);
+  const urgentCount = delays.filter((d) => d.orderType === 'URGENT').length;
+  if (urgentCount > 0) actionPlan.push(`${urgentCount} urgent order${urgentCount === 1 ? ' is' : 's are'} past the TAT limit — review these before the others.`);
+  const stockCount = delays.filter((d) => d.orderKind === 'Stock').length;
+  if (stockCount > 0 && stockCount === delays.length) actionPlan.push('All delays are stock orders — no customer order is currently past its TAT limit.');
+
+  return { priority, byStage, byKarigar, actionPlan };
+}
 
 /**
  * Every ACTIVE order that has been in its current stage longer than that
@@ -144,6 +263,7 @@ export async function getTatDelays(user: AuthUser, filters: TatFilters = {}, lim
     total: delays.length,
     byRule,
     byKind,
+    analysis: buildAnalysis(delays),
     delays: delays.slice(0, limit),
   };
 }
