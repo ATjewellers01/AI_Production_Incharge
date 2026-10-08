@@ -619,12 +619,12 @@ function TatDelaysPanel({ tat }: { tat: TatDelaysResult }) {
             <ul className="list-disc space-y-1 pl-4">
               {tat.analysis.byStage.slice(0, 3).map((s) => (
                 <li key={s.stage}>
-                  <span className="font-medium">{s.stage}</span> — {s.count} delayed, worst {s.worstOrderNo} ({s.maxDaysOver}d over)
+                  <span className="font-medium">{s.stage}</span> — {s.count} late, sabse late {s.worstOrderNo} ({s.maxDaysOver} din upar)
                 </li>
               ))}
               {tat.analysis.byKarigar.slice(0, 3).map((k) => (
                 <li key={k.karigarName}>
-                  <span className="font-medium">{k.karigarName}</span> — {k.delayedCount} delayed, worst {k.worstOrderNo}
+                  <span className="font-medium">{k.karigarName}</span> — {k.delayedCount} late, sabse late {k.worstOrderNo}
                 </li>
               ))}
             </ul>

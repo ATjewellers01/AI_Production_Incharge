@@ -118,22 +118,22 @@ function priorityScore(d: TatDelay): number {
 function orderSuggestion(d: TatDelay): string {
   switch (d.rule) {
     case 'METAL_ISSUE':
-      return `Issue metal for ${d.orderNo} today — waiting ${d.daysInStage}d at ${d.stage} (limit ${d.limitDays}d).`;
+      return `${d.orderNo} ka metal aaj hi issue karo — ${d.daysInStage} din se ${d.stage} me ruka hai (limit ${d.limitDays} din).`;
     case 'PRODUCTION':
-      return `Follow up with ${d.karigarName ?? 'the karigar'} on ${d.orderNo} — ${d.daysInStage}d at ${d.stage} (limit ${d.limitDays}d).`;
+      return `${d.karigarName ?? 'Karigar'} se ${d.orderNo} ka status aaj hi pucho — ${d.daysInStage} din se ${d.stage} me hai (limit ${d.limitDays} din).`;
     case 'FINISHING':
-      return `Check ${d.stage} for ${d.orderNo} — ${d.daysInStage}d (limit ${d.limitDays}d); get it moved to the next stage.`;
+      return `${d.orderNo} ${d.daysInStage} din se ${d.stage} me ruka hai (limit ${d.limitDays} din) — ise agle stage me bhejne ke liye follow up karo.`;
   }
 }
 
 function stageSuggestion(rule: TatRuleKey, stage: string, count: number): string {
   switch (rule) {
     case 'METAL_ISSUE':
-      return `Clear the metal-issue queue first: ${count} order${count === 1 ? '' : 's'} still waiting at ${stage}.`;
+      return `Sabse pehle metal issue ki queue clear karo: ${count} order ${stage} me metal ka intezaar kar rahe hain.`;
     case 'PRODUCTION':
-      return `Review karigar progress: ${count} order${count === 1 ? '' : 's'} stuck at ${stage}.`;
+      return `Karigar ka progress check karo: ${count} order ${stage} me atke hain.`;
     case 'FINISHING':
-      return `Check the finishing floor: ${count} order${count === 1 ? '' : 's'} stuck at ${stage}.`;
+      return `Finishing ka kaam dekho: ${count} order ${stage} me atke hain.`;
   }
 }
 
@@ -179,8 +179,8 @@ function buildAnalysis(delays: TatDelay[]): TatAnalysis {
       ...k,
       suggestion:
         k.delayedCount >= 3
-          ? `${k.delayedCount} delayed orders with ${k.karigarName} — hold new work for them until these are cleared; start with ${k.worstOrderNo}.`
-          : `Follow up with ${k.karigarName} on ${k.worstOrderNo} (${k.maxDaysOver}d over the limit).`,
+          ? `${k.karigarName} ke paas ${k.delayedCount} orders late hain — jab tak ye clear nahi hote, inhe naya kaam mat do; ${k.worstOrderNo} se shuru karo.`
+          : `${k.karigarName} se ${k.worstOrderNo} ke baare me follow up karo (limit se ${k.maxDaysOver} din upar).`,
     }))
     .sort((a, b) => b.delayedCount - a.delayedCount || b.maxDaysOver - a.maxDaysOver)
     .slice(0, 5);
@@ -190,9 +190,9 @@ function buildAnalysis(delays: TatDelay[]): TatAnalysis {
   if (byStage[0]) actionPlan.push(byStage[0].suggestion);
   if (byKarigar[0]) actionPlan.push(byKarigar[0].suggestion);
   const urgentCount = delays.filter((d) => d.orderType === 'URGENT').length;
-  if (urgentCount > 0) actionPlan.push(`${urgentCount} urgent order${urgentCount === 1 ? ' is' : 's are'} past the TAT limit — review these before the others.`);
+  if (urgentCount > 0) actionPlan.push(`${urgentCount} urgent order TAT limit paar kar chuke hain — inhe baaki sabse pehle dekho.`);
   const stockCount = delays.filter((d) => d.orderKind === 'Stock').length;
-  if (stockCount > 0 && stockCount === delays.length) actionPlan.push('All delays are stock orders — no customer order is currently past its TAT limit.');
+  if (stockCount > 0 && stockCount === delays.length) actionPlan.push('Abhi sirf stock orders late hain — koi customer order TAT limit se upar nahi hai.');
 
   return { priority, byStage, byKarigar, actionPlan };
 }
