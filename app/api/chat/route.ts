@@ -8,6 +8,11 @@ import { getOpenAI, CHAT_MODEL, getToolSchemas, getSystemPrompt, runTool, type S
 // confused model can't loop indefinitely against the database.
 const MAX_TOOL_ROUNDS = 5;
 
+// Hindi/Hinglish/English wordings of "where should we focus / what is stuck /
+// what do you suggest". Kept narrow on purpose (no bare "late"/"kahan") so
+// order-lookup questions like "JF-1042 kahan hai?" are not hijacked.
+const TAT_QUESTION_RE = /dhyan|attention|focus|prioriti|\btat\b|turnaround|suggest|sujhav|action plan|kya kare|kya karna|stuck|atk[ae]|ruk[ae]|bottleneck/i;
+
 type ChatBody = {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   // Which business this question is scoped to — 'o2d' (default, for
@@ -75,6 +80,15 @@ export async function POST(req: NextRequest) {
     ...history.map((m) => ({ role: m.role, content: m.content }) as ChatCompletionMessageParam),
   ];
 
+  // "Where should we give attention / what is stuck / any suggestions" questions
+  // must always be answered from the TAT analysis, not from the model's own
+  // guess — so on the O2D source the first round is forced to call
+  // getTatDelays (later rounds stay free). Plain "delayed orders" questions are
+  // deliberately NOT matched here; the model picks between the due-date tool
+  // and the TAT tool for those.
+  const lastUserText = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
+  const forceTat = source === 'o2d' && TAT_QUESTION_RE.test(lastUserText);
+
   const toolCallLog: Array<{ name: string; args: unknown }> = [];
   const encoder = new TextEncoder();
 
@@ -97,6 +111,7 @@ export async function POST(req: NextRequest) {
               model: CHAT_MODEL,
               messages,
               tools: toolSchemas,
+              ...(forceTat && round === 0 ? { tool_choice: { type: 'function' as const, function: { name: 'getTatDelays' } } } : {}),
               temperature: 0.2,
             });
             const choice = completion.choices[0];
