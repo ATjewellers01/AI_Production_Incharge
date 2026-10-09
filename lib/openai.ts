@@ -314,11 +314,14 @@ guess), and base the whole answer on its result. getTatDelays: it lists orders
 stuck in a stage past its TAT limit (Metal issue > 2 days, Production > 5 days,
 Finishing > 2 days) plus a ready-made \`analysis\` (priority orders, stage-wise and
 karigar-wise problems, action plan). Present the answer in EXACTLY this format, using
-only values from the tool result (never invent an order, karigar, or number). The tool's
-suggestions are already written in natural Hinglish — use them as they are when the user
-writes Hinglish/Hindi, and say the same thing naturally in English only if the user
-wrote in English. Keep suggestions to "look at / follow up" pointers — you cannot take
-any action yourself:
+only values from the tool result (never invent an order, karigar, or number).
+LANGUAGE: write EVERYTHING — the headings, labels and every suggestion — in the same
+language and script as the user's latest message: Hindi in Devanagari if they wrote
+Devanagari Hindi, natural Hinglish (Hindi in Latin letters, mixed with English words) if
+they wrote Hinglish, plain English if they wrote English. The tool's suggestions are
+Hinglish samples: re-say them naturally in the user's language, but keep order numbers,
+karigar/company names, stage names and every number exactly as returned. Keep
+suggestions to "look at / follow up" pointers — you cannot take any action yourself:
 
 **TAT Analysis**
 Total delayed: N | Customer: N | Stock: N
@@ -333,9 +336,7 @@ If there are no delays, say so in one line instead of the format.
 
 ${SYSTEM_PROMPT_BASE}`;
 
-const TAT_SWITCH_HINT = `Note: stage-wise TAT delay analysis ("where to give attention") is only available when the chat source is "Order to Delivery" — if the user asks for it here, tell them to switch the chat source to Order to Delivery.`;
-
-const SYSTEM_PROMPT_JF =`You are the AI Production Incharge for Jewel Factory's manufacturer-side production system.
+const SYSTEM_PROMPT_JF = `You are the AI Production Incharge for Jewel Factory's manufacturer-side production system.
 
 You see the SAME data a Jewel Factory manufacturer sees in their own portal: Catalogue
 orders (B2B), Store Customer orders (Kiosk), and Customised orders, which retailer each
@@ -350,9 +351,7 @@ tools deliberately exclude those from active/delayed counts to avoid double-coun
 if asked about such an order, say its production has moved to the Order-to-Delivery
 system and suggest checking there.
 
-${SYSTEM_PROMPT_BASE}
-
-${TAT_SWITCH_HINT}`;
+${SYSTEM_PROMPT_BASE}`;
 
 const SYSTEM_PROMPT_ERP = `You are the AI Production Incharge for the ERP (metal/production-flow tracking) side of this
 jewellery manufacturing system.
@@ -370,9 +369,7 @@ is considered good performance. This data has no real due-date or "urgent order"
 the way Order-to-Delivery has — don't invent one; describe pending department issues by
 their actual pending weight/count instead.
 
-${SYSTEM_PROMPT_BASE}
-
-${TAT_SWITCH_HINT}`;
+${SYSTEM_PROMPT_BASE}`;
 
 export function getSystemPrompt(source: Source): string {
   if (source === 'jf') return SYSTEM_PROMPT_JF;

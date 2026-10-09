@@ -45,11 +45,10 @@ type StreamEvent =
  * those functions can write to the database (see each tools file's own
  * header comment).
  *
- * Tool-call rounds (the model deciding which data to fetch) are NOT
- * streamed — they produce no user-visible text, only function-call
- * arguments, so there's nothing worth showing incrementally. Only the
- * FINAL round (the model's actual answer, once it has every tool result it
- * asked for) streams its text back token-by-token.
+ * Every round is streamed from OpenAI: text deltas are forwarded to the
+ * client immediately (a direct answer, or the answer written after the tool
+ * results come back, types out live), while tool-call argument fragments are
+ * accumulated silently and executed once the round's stream ends.
  */
 export async function POST(req: NextRequest) {
   let user;
@@ -68,26 +67,27 @@ export async function POST(req: NextRequest) {
   if (!body?.messages?.length) {
     return NextResponse.json({ success: false, message: 'messages is required' }, { status: 400 });
   }
-  const source: Source = body.source === 'jf' ? 'jf' : body.source === 'erp' ? 'erp' : 'o2d';
-  const toolSchemas = getToolSchemas(source);
-
   // Keep only the last 10 turns as context — this is a stateless Q&A
   // assistant, not a long-running conversation that needs full history.
   const history = body.messages.slice(-10);
+
+  // "Where should we give attention / what is stuck / any suggestions" questions
+  // must always be answered from the TAT analysis, not from the model's own
+  // guess. TAT lives in the O2D data, so such a question is answered from O2D
+  // whichever source the chat dropdown is on, and the first round is forced to
+  // call getTatDelays (later rounds stay free). Plain "delayed orders"
+  // questions are deliberately NOT matched here; the model picks between the
+  // due-date tool and the TAT tool for those.
+  const lastUserText = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
+  const forceTat = TAT_QUESTION_RE.test(lastUserText);
+
+  const source: Source = forceTat ? 'o2d' : body.source === 'jf' ? 'jf' : body.source === 'erp' ? 'erp' : 'o2d';
+  const toolSchemas = getToolSchemas(source);
 
   const messages: ChatCompletionMessageParam[] = [
     { role: 'system', content: getSystemPrompt(source) },
     ...history.map((m) => ({ role: m.role, content: m.content }) as ChatCompletionMessageParam),
   ];
-
-  // "Where should we give attention / what is stuck / any suggestions" questions
-  // must always be answered from the TAT analysis, not from the model's own
-  // guess — so on the O2D source the first round is forced to call
-  // getTatDelays (later rounds stay free). Plain "delayed orders" questions are
-  // deliberately NOT matched here; the model picks between the due-date tool
-  // and the TAT tool for those.
-  const lastUserText = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
-  const forceTat = source === 'o2d' && TAT_QUESTION_RE.test(lastUserText);
 
   const toolCallLog: Array<{ name: string; args: unknown }> = [];
   const encoder = new TextEncoder();
@@ -103,38 +103,62 @@ export async function POST(req: NextRequest) {
           const isLastPossibleRound = round === MAX_TOOL_ROUNDS - 1;
 
           if (!isLastPossibleRound) {
-            // Non-streamed: we need to see whether the model wants to call a
-            // tool BEFORE committing to a streamed text response, since a
-            // streaming completion with tool_calls arrives as fragmented
-            // JSON-argument deltas, not readable text — not worth streaming.
-            const completion = await getOpenAI().chat.completions.create({
+            // Streamed end-to-end: text deltas go to the client the moment
+            // they arrive (so a direct answer, or the answer after the tool
+            // results, types out live), while any tool_calls fragments are
+            // accumulated silently by index until the stream ends.
+            const completionStream = await getOpenAI().chat.completions.create({
               model: CHAT_MODEL,
               messages,
               tools: toolSchemas,
               ...(forceTat && round === 0 ? { tool_choice: { type: 'function' as const, function: { name: 'getTatDelays' } } } : {}),
               temperature: 0.2,
+              stream: true,
             });
-            const choice = completion.choices[0];
-            const toolCalls = choice?.message?.tool_calls;
 
-            if (!toolCalls?.length) {
-              // Model answered directly with no tool call — stream this
-              // text back in small artificial chunks so the UI still gets
-              // the live-typing effect, then finish.
-              const text = choice?.message?.content ?? '';
-              for (const chunk of chunkText(text)) send({ type: 'delta', text: chunk });
+            let text = '';
+            const acc = new Map<number, { id: string; name: string; args: string }>();
+            for await (const part of completionStream) {
+              const delta = part.choices[0]?.delta;
+              if (delta?.content) {
+                text += delta.content;
+                send({ type: 'delta', text: delta.content });
+              }
+              for (const tc of delta?.tool_calls ?? []) {
+                const entry = acc.get(tc.index) ?? { id: '', name: '', args: '' };
+                if (tc.id) entry.id = tc.id;
+                if (tc.function?.name) entry.name += tc.function.name;
+                if (tc.function?.arguments) entry.args += tc.function.arguments;
+                acc.set(tc.index, entry);
+              }
+            }
+
+            const toolCalls = Array.from(acc.entries())
+              .sort((a, b) => a[0] - b[0])
+              .map(([, v]) => v);
+
+            if (!toolCalls.length) {
               send({ type: 'done', toolCalls: toolCallLog });
               controller.close();
               return;
             }
 
-            messages.push(choice.message);
+            messages.push({
+              role: 'assistant',
+              content: text || null,
+              tool_calls: toolCalls.map((t) => ({ id: t.id, type: 'function' as const, function: { name: t.name, arguments: t.args } })),
+            });
             for (const call of toolCalls) {
-              const args = JSON.parse(call.function.arguments || '{}');
-              toolCallLog.push({ name: call.function.name, args });
+              let args: Record<string, unknown> = {};
+              try {
+                args = JSON.parse(call.args || '{}');
+              } catch {
+                // malformed arguments from the model — run the tool with no filters
+              }
+              toolCallLog.push({ name: call.name, args });
               let result: unknown;
               try {
-                result = await runTool(call.function.name, args, user, source);
+                result = await runTool(call.name, args, user, source);
               } catch (e) {
                 result = { error: e instanceof Error ? e.message : 'Tool failed' };
               }
@@ -177,21 +201,4 @@ export async function POST(req: NextRequest) {
       'X-Accel-Buffering': 'no',
     },
   });
-}
-
-/** Splits text into small chunks so a non-streamed model reply still gets a
- * live-typing effect on the client, matching the real-streamed case. */
-function chunkText(text: string, size = 6): string[] {
-  const words = text.split(/(\s+)/);
-  const chunks: string[] = [];
-  let buf = '';
-  for (const w of words) {
-    buf += w;
-    if (buf.length >= size) {
-      chunks.push(buf);
-      buf = '';
-    }
-  }
-  if (buf) chunks.push(buf);
-  return chunks;
 }

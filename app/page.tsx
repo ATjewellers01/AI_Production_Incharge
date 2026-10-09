@@ -110,6 +110,12 @@ const SOURCES: { value: Source; label: string }[] = [
 const CHART_COLORS = { primary: '#c9862f', muted: '#a3a3a3', danger: '#dc2626', good: '#059669', sky: '#0284c7' };
 const PIPELINE_COLORS = [CHART_COLORS.sky, CHART_COLORS.muted, CHART_COLORS.good];
 
+const CHAT_BOX_KEY = 'ai_incharge_chat_box';
+const CHAT_BOX_DEFAULT = { width: 380, right: 20 };
+const CHAT_MIN_W = 320;
+const CHAT_MIN_RIGHT = 8;
+const clamp = (n: number, min: number, max: number) => Math.min(Math.max(n, min), Math.max(min, max));
+
 export default function DashboardPage() {
   const router = useRouter();
   const [chatSource, setChatSource] = useState<Source>('o2d');
@@ -124,6 +130,58 @@ export default function DashboardPage() {
   const [chatOpen, setChatOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<string>('section-o2d');
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [chatBox, setChatBox] = useState(CHAT_BOX_DEFAULT);
+
+  // Restore the last chat size the user dragged to (per browser).
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CHAT_BOX_KEY) ?? 'null') as { width: number; right: number } | null;
+      if (saved && Number.isFinite(saved.width) && Number.isFinite(saved.right)) {
+        setChatBox({ width: Math.max(CHAT_MIN_W, saved.width), right: Math.max(CHAT_MIN_RIGHT, saved.right) });
+      }
+    } catch {
+      // storage unavailable or corrupt — keep the default size
+    }
+  }, []);
+
+  /** Pointer-drag resize for the floating chat panel. The panel is anchored by
+   * its right offset: dragging the LEFT edge changes the width only, dragging
+   * the RIGHT edge moves the panel's right edge (offset + width change). */
+  function startChatResize(side: 'left' | 'right') {
+    return (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const el = e.currentTarget;
+      el.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const start = chatBox;
+      const vw = window.innerWidth;
+      let latest = start;
+
+      const onMove = (ev: PointerEvent) => {
+        const dx = ev.clientX - startX;
+        if (side === 'left') {
+          latest = { width: clamp(start.width - dx, CHAT_MIN_W, vw - start.right - 8), right: start.right };
+        } else {
+          const right = clamp(start.right - dx, CHAT_MIN_RIGHT, vw - CHAT_MIN_W - 8);
+          latest = { width: clamp(start.width + (start.right - right), CHAT_MIN_W, vw - right - 8), right };
+        }
+        setChatBox(latest);
+      };
+      const onUp = () => {
+        el.removeEventListener('pointermove', onMove);
+        el.removeEventListener('pointerup', onUp);
+        el.removeEventListener('pointercancel', onUp);
+        try {
+          localStorage.setItem(CHAT_BOX_KEY, JSON.stringify(latest));
+        } catch {
+          // ignore — resizing still works for this session
+        }
+      };
+      el.addEventListener('pointermove', onMove);
+      el.addEventListener('pointerup', onUp);
+      el.addEventListener('pointercancel', onUp);
+    };
+  }
 
   async function loadAll() {
     setLoading(true);
@@ -412,7 +470,24 @@ export default function DashboardPage() {
       )}
 
       {chatOpen && (
-        <section className="fixed bottom-5 right-5 z-30 flex h-[min(600px,calc(100dvh-2.5rem))] w-[min(380px,calc(100vw-2.5rem))] flex-col rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+        <section
+          style={{ width: chatBox.width, right: chatBox.right, maxWidth: 'calc(100vw - 1rem)' }}
+          className="fixed bottom-5 z-30 flex h-[min(600px,calc(100dvh-2.5rem))] flex-col rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl"
+        >
+          {/* Drag handles on both side edges — drag to make the chat wider or
+              narrower; double-click either to reset to the default size. */}
+          <div
+            onPointerDown={startChatResize('left')}
+            onDoubleClick={() => setChatBox(CHAT_BOX_DEFAULT)}
+            title="Drag to resize"
+            className="absolute left-0 top-0 z-10 h-full w-2.5 -translate-x-1/2 cursor-ew-resize touch-none select-none rounded-full hover:bg-[var(--primary)]/30"
+          />
+          <div
+            onPointerDown={startChatResize('right')}
+            onDoubleClick={() => setChatBox(CHAT_BOX_DEFAULT)}
+            title="Drag to resize"
+            className="absolute right-0 top-0 z-10 h-full w-2.5 translate-x-1/2 cursor-ew-resize touch-none select-none rounded-full hover:bg-[var(--primary)]/30"
+          />
           <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
             <div className="flex items-center gap-2">
               <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--primary)] text-[var(--primary-foreground)]">
